@@ -14,6 +14,7 @@ const DEFAULT_SETTINGS: GitSettings = {
 };
 
 //TODO: Configure commands to control git
+//TODO: Switch to GitHub REST API so it works on mobile or just make a separate plugin
 export default class ObsidianGitSync extends Plugin {
 	settings: GitSettings;
 	git: SimpleGit = simpleGit((this.app.vault.adapter as any).basePath);
@@ -234,7 +235,7 @@ class GitSyncSettingTab extends PluginSettingTab {
 				.inputEl.classList.add('git-sync-config-field')
 			);
 
-		//TODO: añadir PAT a url diferenciando https y ssh
+		//TODO: añadir PAT a url diferenciando https y ssh 
 		new Setting(containerEl)
 			.setName('GitHub PAT')
 			.setDesc('Personal access token which you need to create in your GitHub account (If you have any other authentication methods already configured such as SSH you don\'t need to fill this field).')
