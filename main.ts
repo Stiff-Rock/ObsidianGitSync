@@ -234,12 +234,13 @@ class GitSyncSettingTab extends PluginSettingTab {
 				.inputEl.classList.add('git-sync-config-field')
 			);
 
+		//TODO: añadir PAT a url diferenciando https y ssh
 		new Setting(containerEl)
-			.setName('GitHub Password/Token')
-			.setDesc('Password or personal access token')
+			.setName('GitHub PAT')
+			.setDesc('Personal access token which you need to create in your GitHub account (If you have any other authentication methods already configured such as SSH you don\'t need to fill this field).')
 			.addText((text) => {
 				text
-					.setPlaceholder('Password or token')
+					.setPlaceholder('Personal Acces Token')
 					.setValue(this.plugin.settings.gitHubPwd)
 					.onChange(async (value) => {
 						this.plugin.settings.gitHubPwd = value;
@@ -260,7 +261,7 @@ class GitSyncSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Auto Commit Timer')
-			.setDesc('Enables a timer which will save the vault periodically (in miliseconds). If let on 0 or empty, it will use the default value (60000)')
+			.setDesc('Enables a timer which will save the vault periodically (in miliseconds). If let on 0 or empty, it will use the default value (60000).')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.doAutoCommit)
 				.onChange(async (value) => {
