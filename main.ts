@@ -301,7 +301,7 @@ class GitSyncSettingTab extends PluginSettingTab {
 		// GitHub Username
 		this.githubUsernameSetting = new Setting(containerEl)
 			.setName('GitHub Username')
-			.setDesc('Your GitHub username')
+			.setDesc('Your GitHub username (Not needed if you are using an SSH url).')
 			.addText(text => {
 				text.setPlaceholder('Username')
 				text.setValue(this.plugin.settings.gitHubUser)
