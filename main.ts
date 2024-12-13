@@ -15,6 +15,8 @@ const DEFAULT_SETTINGS: GitSettings = {
 	gitHubPat: ''
 };
 
+//TODO: Create a class for the configuration with each aspect and a general isConfigured boolean flag
+
 //NOTE: Configure commands to control git
 //NOTE: Switch to GitHub REST API so it works on mobile or just make a separate plugin
 
@@ -236,6 +238,7 @@ class GitSyncSettingTab extends PluginSettingTab {
 	plugin: ObsidianGitSync;
 
 	githubPatSetting: Setting
+	githubUsernameSetting: Setting
 
 	constructor(app: App, plugin: ObsidianGitSync) {
 		super(app, plugin);
@@ -260,6 +263,7 @@ class GitSyncSettingTab extends PluginSettingTab {
 					let message = 'Invalid Url, make sure it\'s https or ssh'
 					if (this.plugin.httpsUrl.test(value)) {
 						(this.githubPatSetting.controlEl.querySelector('input') as HTMLInputElement).style.display = 'block';
+						(this.githubUsernameSetting.controlEl.querySelector('input') as HTMLInputElement).style.display = 'block';
 
 						if (await this.plugin.git.checkIsRepo() && this.plugin.settings.gitHubPat !== '') {
 							await this.plugin.git.remote(['set-url', 'origin', value]);
@@ -276,6 +280,7 @@ class GitSyncSettingTab extends PluginSettingTab {
 						}
 					} else if (this.plugin.sshUrl.test(value)) {
 						(this.githubPatSetting.controlEl.querySelector('input') as HTMLInputElement).style.display = 'none';
+						(this.githubUsernameSetting.controlEl.querySelector('input') as HTMLInputElement).style.display = 'none';
 
 						if (await this.plugin.git.checkIsRepo())
 							await this.plugin.git.remote(['set-url', 'origin', value]);
@@ -284,6 +289,7 @@ class GitSyncSettingTab extends PluginSettingTab {
 						message = 'Valid SSH Url, make sure you have configured SSH authentication';
 					} else {
 						(this.githubPatSetting.controlEl.querySelector('input') as HTMLInputElement).style.display = 'block';
+						(this.githubUsernameSetting.controlEl.querySelector('input') as HTMLInputElement).style.display = 'block';
 					}
 
 					new Notice(message, 4000)
@@ -292,21 +298,22 @@ class GitSyncSettingTab extends PluginSettingTab {
 				text.inputEl.classList.add('git-sync-config-field');
 			});
 
-		//TODO: Disable username if using ssh
-
 		// GitHub Username
-		new Setting(containerEl)
+		this.githubUsernameSetting = new Setting(containerEl)
 			.setName('GitHub Username')
 			.setDesc('Your GitHub username')
-			.addText(text => text
-				.setPlaceholder('Username')
-				.setValue(this.plugin.settings.gitHubUser)
-				.onChange(async (value) => {
+			.addText(text => {
+				text.setPlaceholder('Username')
+				text.setValue(this.plugin.settings.gitHubUser)
+				text.onChange(async (value) => {
 					this.plugin.settings.gitHubUser = value;
 					await this.plugin.saveSettings();
 				})
-				.inputEl.classList.add('git-sync-config-field')
-			);
+				text.inputEl.classList.add('git-sync-config-field')
+
+				if (this.plugin.sshUrl.test(this.plugin.settings.gitHubRepo))
+					text.inputEl.style.display = 'none';
+			});
 
 		// GitHub Personal Acces Token
 		this.githubPatSetting = new Setting(containerEl)
@@ -315,18 +322,16 @@ class GitSyncSettingTab extends PluginSettingTab {
 			.addText((text) => {
 				text.setPlaceholder('Personal Acces Token')
 				text.setValue(this.plugin.settings.gitHubPat)
-
-				if (this.plugin.sshUrl.test(this.plugin.settings.gitHubRepo))
-					text.inputEl.style.display = 'none';
-
 				text.onChange(async (value) => {
 					this.plugin.settings.gitHubPat = value;
 					await this.plugin.saveSettings();
 					this.plugin.addPatToRepoUrl();
 				})
-
 				text.inputEl.classList.add('git-sync-config-field');
 				text.inputEl.setAttribute("type", "password");
+
+				if (this.plugin.sshUrl.test(this.plugin.settings.gitHubRepo))
+					text.inputEl.style.display = 'none';
 			});
 
 		// Create repository button
