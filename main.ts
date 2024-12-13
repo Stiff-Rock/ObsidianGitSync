@@ -1,20 +1,23 @@
 import { Plugin, PluginSettingTab, App, Setting, Notice, Tasks } from 'obsidian';
 import simpleGit, { SimpleGit } from 'simple-git';
+import * as fs from 'fs';
+import * as path from 'path';
 
 interface GitSettings {
 	gitHubRepo: string;
 	gitHubUser: string;
-	gitHubPwd: string;
+	gitHubPat: string;
 }
 
 const DEFAULT_SETTINGS: GitSettings = {
 	gitHubRepo: '',
 	gitHubUser: '',
-	gitHubPwd: ''
+	gitHubPat: ''
 };
 
-//TODO: Configure commands to control git
-//TODO: Switch to GitHub REST API so it works on mobile or just make a separate plugin
+//NOTE: Configure commands to control git
+//NOTE: Switch to GitHub REST API so it works on mobile or just make a separate plugin
+
 export default class ObsidianGitSync extends Plugin {
 	settings: GitSettings;
 	git: SimpleGit = simpleGit((this.app.vault.adapter as any).basePath);
@@ -24,6 +27,9 @@ export default class ObsidianGitSync extends Plugin {
 	intervalTime = 60000;
 
 	statusBarText: HTMLSpanElement;
+
+	httpsUrl = /^https:\/\/github\.com\/[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+\.git$/;
+	sshUrl = /^git@github\.com:[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+\.git$/;
 
 	async onload() {
 		await this.loadSettings();
@@ -37,8 +43,9 @@ export default class ObsidianGitSync extends Plugin {
 
 		this.statusBarText = this.addStatusBarItem().createEl('span', { text: 'Git Sync: Started' });
 
-		await this.isCorrectlyConfigured()
+		await this.isConfigured()
 
+		// Stop interval and commit changes right before closing the app
 		this.app.workspace.on('quit', (tasks: Tasks) => {
 			tasks.add(async () => {
 				await this.stopGitInterval();
@@ -60,6 +67,14 @@ export default class ObsidianGitSync extends Plugin {
 		await this.saveData(this.settings);
 	}
 
+	async isConfigured() {
+		if (!await this.git.checkIsRepo() || this.settings.gitHubRepo === DEFAULT_SETTINGS.gitHubRepo &&
+			this.settings.gitHubUser === DEFAULT_SETTINGS.gitHubUser &&
+			this.settings.gitHubPat === DEFAULT_SETTINGS.gitHubPat) {
+			this.statusBarText.textContent = 'Git Sync: Needs configuration';
+		}
+	}
+
 	startGitInterval() {
 		console.log('Git timer started')
 		this.gitIntervalId = setInterval(async () => {
@@ -75,19 +90,6 @@ export default class ObsidianGitSync extends Plugin {
 		}
 	}
 
-	//TODO: Tener en cuenta más factores
-	async isCorrectlyConfigured() {
-		let isCorrect = true;
-
-		if (!await this.git.checkIsRepo()) {
-			isCorrect = false;
-			this.statusBarText.textContent = 'Git Sync: No repository';
-		}
-
-		return isCorrect;
-	}
-
-	//TODO: Be more specific of the errors to the user
 	async createRepo() {
 		let message = 'Unknown error initializing repository';
 
@@ -95,6 +97,22 @@ export default class ObsidianGitSync extends Plugin {
 			const isRepo = await this.git.checkIsRepo();
 
 			if (!isRepo) {
+				const repoUrl = this.settings.gitHubRepo;
+
+				if (this.httpsUrl.test(repoUrl)) {
+					if (!this.settings.gitHubPat) {
+						new Notice('You need to configure a PAT before initializing the repository', 4000);
+						return;
+					}
+
+					this.addPatToRepoUrl();
+				} else if (this.sshUrl.test(repoUrl)) {
+					new Notice('Your remote URL uses SSH, make sure you have configured it', 4000);
+				} else {
+					new Notice('Invalid repository URL', 4000);
+					return;
+				}
+
 				await this.git.init();
 
 				try {
@@ -122,6 +140,21 @@ export default class ObsidianGitSync extends Plugin {
 		} finally {
 			new Notice(message, 3000);
 		}
+	}
+
+	async deleteRepo() {
+		if (await this.git.checkIsRepo()) {
+			const gitDir = path.join((this.app.vault.adapter as any).basePath, '.git');
+			fs.rmSync(gitDir, { recursive: true, force: true });
+		} else {
+			new Notice('There is no repository to delete', 4000)
+		}
+	}
+
+	//FIX: Maybe the test gives false negative because it has the pat in it
+	async addPatToRepoUrl() {
+		if (this.settings.gitHubRepo !== '' && this.httpsUrl.test(this.settings.gitHubRepo))
+			return this.settings.gitHubRepo = `https://${this.settings.gitHubUser}:${this.settings.gitHubPat}@${this.settings.gitHubRepo.split('//')[1]}`;
 	}
 
 	async addAndCommitVault() {
@@ -152,12 +185,15 @@ export default class ObsidianGitSync extends Plugin {
 		}
 	}
 
-	//TODO: the pwd auth will not work
 	async pushVault() {
 		try {
 			await this.addAndCommitVault();
+
+			// Obtains the current local branch and the remote branches
 			const currentBranch = await this.git.revparse(['--abbrev-ref', 'HEAD']);
 			const remoteBranches = await this.git.branch(['-r']);
+
+			// Checks if the current local branch exists in the remote and if not it sets it as the main branch
 			if (!remoteBranches.all.includes(`origin/${currentBranch}`)) {
 				await this.git.push(['--set-upstream', 'origin', currentBranch]);
 			} else {
@@ -169,7 +205,6 @@ export default class ObsidianGitSync extends Plugin {
 			new Notice(message, 3000);
 		}
 	}
-
 
 	async fetchVault() {
 		try {
@@ -194,10 +229,13 @@ export default class ObsidianGitSync extends Plugin {
 			new Notice(message, 3000);
 		}
 	}
+
 }
 
 class GitSyncSettingTab extends PluginSettingTab {
 	plugin: ObsidianGitSync;
+
+	githubPatSetting: Setting
 
 	constructor(app: App, plugin: ObsidianGitSync) {
 		super(app, plugin);
@@ -209,19 +247,54 @@ class GitSyncSettingTab extends PluginSettingTab {
 
 		containerEl.empty();
 
+		// Repository Remote Url
 		new Setting(containerEl)
 			.setName('GitHub Repository Url')
-			.setDesc('The Url of the GitHub repository that will store the vault')
-			.addText(text => text
-				.setPlaceholder('Repository Url')
-				.setValue(this.plugin.settings.gitHubRepo)
-				.onChange(async (value) => {
-					this.plugin.settings.gitHubRepo = value;
-					await this.plugin.saveSettings();
-				})
-				.inputEl.classList.add('git-sync-config-field')
-			);
+			.setDesc('The Url of the GitHub repository that will store the vault. Use HTTPS unless you have SSH auth configured')
+			.addText(text => {
+				text.setPlaceholder('Repository Url')
+					.setValue(this.plugin.settings.gitHubRepo);
+				text.inputEl.onblur = async (event: FocusEvent) => {
+					const value = (event.target as HTMLInputElement).value;
 
+					let message = 'Invalid Url, make sure it\'s https or ssh'
+					if (this.plugin.httpsUrl.test(value)) {
+						(this.githubPatSetting.controlEl.querySelector('input') as HTMLInputElement).style.display = 'block';
+
+						if (await this.plugin.git.checkIsRepo() && this.plugin.settings.gitHubPat !== '') {
+							await this.plugin.git.remote(['set-url', 'origin', value]);
+
+							try {
+								await this.plugin.git.fetch();
+								message = 'Valid HTTPS Url';
+							} catch (err) {
+								message = 'Error checking auth with new url: ' + err;
+							}
+						} else if (await this.plugin.git.checkIsRepo() && this.plugin.settings.gitHubPat === '') {
+							this.plugin.settings.gitHubRepo = value;
+							await this.plugin.saveSettings();
+						}
+					} else if (this.plugin.sshUrl.test(value)) {
+						(this.githubPatSetting.controlEl.querySelector('input') as HTMLInputElement).style.display = 'none';
+
+						if (await this.plugin.git.checkIsRepo())
+							await this.plugin.git.remote(['set-url', 'origin', value]);
+
+
+						message = 'Valid SSH Url, make sure you have configured SSH authentication';
+					} else {
+						(this.githubPatSetting.controlEl.querySelector('input') as HTMLInputElement).style.display = 'block';
+					}
+
+					new Notice(message, 4000)
+				};
+
+				text.inputEl.classList.add('git-sync-config-field');
+			});
+
+		//TODO: Disable username if using ssh
+
+		// GitHub Username
 		new Setting(containerEl)
 			.setName('GitHub Username')
 			.setDesc('Your GitHub username')
@@ -235,22 +308,28 @@ class GitSyncSettingTab extends PluginSettingTab {
 				.inputEl.classList.add('git-sync-config-field')
 			);
 
-		//TODO: añadir PAT a url diferenciando https y ssh 
-		new Setting(containerEl)
+		// GitHub Personal Acces Token
+		this.githubPatSetting = new Setting(containerEl)
 			.setName('GitHub PAT')
-			.setDesc('Personal access token which you need to create in your GitHub account (If you have any other authentication methods already configured such as SSH you don\'t need to fill this field).')
+			.setDesc('Personal access token to authenticate yourself. (If you are using an SSH url you don\'t need to fill this field).')
 			.addText((text) => {
-				text
-					.setPlaceholder('Personal Acces Token')
-					.setValue(this.plugin.settings.gitHubPwd)
-					.onChange(async (value) => {
-						this.plugin.settings.gitHubPwd = value;
-						await this.plugin.saveSettings();
-					})
+				text.setPlaceholder('Personal Acces Token')
+				text.setValue(this.plugin.settings.gitHubPat)
+
+				if (this.plugin.sshUrl.test(this.plugin.settings.gitHubRepo))
+					text.inputEl.style.display = 'none';
+
+				text.onChange(async (value) => {
+					this.plugin.settings.gitHubPat = value;
+					await this.plugin.saveSettings();
+					this.plugin.addPatToRepoUrl();
+				})
+
 				text.inputEl.classList.add('git-sync-config-field');
 				text.inputEl.setAttribute("type", "password");
 			});
 
+		// Create repository button
 		new Setting(containerEl)
 			.setName('Create vault repository')
 			.setDesc('Creates the local repository if not done yet')
@@ -260,6 +339,7 @@ class GitSyncSettingTab extends PluginSettingTab {
 				button.buttonEl.classList.add('git-sync-config-field')
 			})
 
+		// Toggle commit interval
 		new Setting(containerEl)
 			.setName('Auto Commit Timer')
 			.setDesc('Enables a timer which will save the vault periodically (in miliseconds). If let on 0 or empty, it will use the default value (60000).')
@@ -297,6 +377,9 @@ class GitSyncSettingTab extends PluginSettingTab {
 				})
 			});
 
+		//TODO: Automatically hide and show buttons depending if theres an existent repo and if theres a remote configure
+
+		// Fetch button
 		new Setting(containerEl)
 			.setName('Fetch Vault')
 			.setDesc('Checks for a new version of the vault and donwloads it')
@@ -306,6 +389,7 @@ class GitSyncSettingTab extends PluginSettingTab {
 				button.buttonEl.classList.add('git-sync-config-field')
 			})
 
+		// Push button
 		new Setting(containerEl)
 			.setName('Push Vault')
 			.setDesc('Uploads the current state of the vault')
@@ -316,6 +400,19 @@ class GitSyncSettingTab extends PluginSettingTab {
 					this.plugin.statusBarText.textContent = 'Git Sync: Changes Pushed';
 				})
 				button.buttonEl.classList.add('git-sync-config-field')
+			})
+
+		// Delete repository button
+		new Setting(containerEl)
+			.setName('Delte repository')
+			.setDesc('Deletes the local repository permanently')
+			.addButton((button) => {
+				button.setButtonText('Delete')
+				button.buttonEl.id = 'delete-btn';
+				button.onClick(_ => {
+					this.plugin.deleteRepo();
+					this.plugin.statusBarText.textContent = 'Git Sync: Local repository deleted';
+				})
 			})
 	}
 }
