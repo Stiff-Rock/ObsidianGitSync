@@ -5,7 +5,8 @@ import * as path from 'path';
 
 class GitSettings {
 	/*NOTE: add sepparate boolean values for the strings since you want to store 
-	* whatever the user types but that does not mean that the values are correct*/
+	* whatever the user types but that does not mean that the values are correct. 
+	* Notify of those missing configs through the status bar*/
 
 	private _gitHubRepo: string;
 	private _gitHubUser: string;
@@ -109,15 +110,13 @@ class GitSettings {
 //NOTE: Configure commands to control git
 //NOTE: Switch to GitHub REST API so it works on mobile or just make a separate plugin
 
+//TODO: Instead of hiding the fields, make them unclickable
 export default class ObsidianGitSync extends Plugin {
 	settings: GitSettings;
 	git: SimpleGit = simpleGit((this.app.vault.adapter as any).basePath);
 	gitIntervalId: NodeJS.Timer;
 
-	doAutoCommit = true;
-
 	statusBarText: HTMLSpanElement;
-
 
 	async onload() {
 		await this.loadSettings();
@@ -165,7 +164,7 @@ export default class ObsidianGitSync extends Plugin {
 	startGitInterval() {
 		console.log('Git timer started')
 		this.gitIntervalId = setInterval(async () => {
-			if (this.doAutoCommit)
+			if (this.settings.doAutoCommit)
 				await this.addAndCommitVault();
 		}, this.settings.intervalTime);
 	}
@@ -195,6 +194,7 @@ export default class ObsidianGitSync extends Plugin {
 				}
 
 				try {
+					await this.git.init()
 					await this.git.addRemote('origin', this.UrlWithPat());
 				} catch (remoteError) {
 					console.error("Error adding remote:", remoteError);
@@ -205,6 +205,7 @@ export default class ObsidianGitSync extends Plugin {
 			} else if (this.settings.isUsingSSH()) {
 				new Notice('Your remote URL uses SSH, make sure you have configured it', 4000);
 				try {
+					await this.git.init()
 					await this.git.addRemote('origin', this.settings.gitHubRepo);
 				} catch (remoteError) {
 					console.error("Error adding remote:", remoteError);
@@ -218,10 +219,7 @@ export default class ObsidianGitSync extends Plugin {
 				return;
 			}
 
-			await this.git.init();
 			this.settings.isRepo = true;
-
-
 
 			try {
 				await this.git.fetch();
@@ -230,6 +228,8 @@ export default class ObsidianGitSync extends Plugin {
 				console.error("Authentication error:", authError);
 				message = "Failed to authenticate with GitHub. Please check your credentials.";
 			}
+
+			console.log('Repository initialized')
 		} catch (error) {
 			console.error("Error initializing Git repo:", error);
 			message = "Error initializing repository. Please ensure Git is installed.";
@@ -243,6 +243,7 @@ export default class ObsidianGitSync extends Plugin {
 			if (await this.git.checkIsRepo()) {
 				const gitDir = path.join((this.app.vault.adapter as any).basePath, '.git');
 				fs.rmSync(gitDir, { recursive: true, force: true });
+				console.log('Repository deleted')
 			}
 		} catch (err) {
 			new Notice('Error deleting repo: ' + err);
@@ -293,11 +294,13 @@ export default class ObsidianGitSync extends Plugin {
 			const remoteBranches = await this.git.branch(['-r']);
 
 			// Checks if the current local branch exists in the remote and if not it sets it as the main branch
-			if (!remoteBranches.all.includes(`origin/${currentBranch}`)) {
+			if (remoteBranches.current !== currentBranch) {
 				await this.git.push(['--set-upstream', 'origin', currentBranch]);
+				console.log('Upstream branch set')
 			} else {
 				await this.git.push();
 			}
+			console.log('Pushed Changes')
 		} catch (error) {
 			let message = "Error pushing changes to repository";
 			console.log(message + ": ", error);
@@ -306,6 +309,7 @@ export default class ObsidianGitSync extends Plugin {
 	}
 
 	async fetchVault() {
+		let message = "Error pulling from remote"
 		try {
 			await this.git.fetch()
 			const status = await this.git.status();
@@ -316,17 +320,19 @@ export default class ObsidianGitSync extends Plugin {
 
 				try {
 					await this.git.pull()
+					message = 'Successfully updated vault';
 				} catch (error) {
-					let message = "Error pulling from remote"
 					console.error(message + ": ", error);
-					new Notice(message, 3000);
 				}
+				console.log('Pulled Changes')
+			} else {
+				message = 'Nothing to pull';
 			}
 		} catch (error) {
-			let message = "Error fetching from remote"
+			message = "Error fetching from remote"
 			console.error(message + ": ", error);
-			new Notice(message, 3000);
 		}
+		new Notice(message, 4000)
 	}
 
 	async closeApp() {
@@ -407,7 +413,6 @@ class GitSyncSettingTab extends PluginSettingTab {
 				};
 			});
 
-		//TODO: Check username if exists
 		// GitHub Username
 		this.githubUsernameSetting = new Setting(containerEl)
 			.setName('GitHub Username')
@@ -415,10 +420,32 @@ class GitSyncSettingTab extends PluginSettingTab {
 			.addText(text => {
 				text.setPlaceholder('Username')
 				text.setValue(this.plugin.settings.gitHubUser)
-				text.onChange(async (value) => {
+				text.inputEl.onblur = async (event: FocusEvent) => {
+					const value = (event.target as HTMLInputElement).value;
 					this.plugin.settings.gitHubUser = value;
 					await this.plugin.saveSettings();
-				})
+
+					if (value === '')
+						return
+
+					const url = `https://api.github.com/users/${value}`;
+					let message = 'Could not verify username'
+					try {
+						const response = await fetch(url);
+
+						if (response.status === 200) {
+							message = 'Username exists'
+						} else if (response.status === 404) {
+							message = 'Username does not exist'
+						} else {
+							message += ': ' + response.status;
+						}
+					} catch (error) {
+						console.error('Error checking username:', error);
+					} finally {
+						new Notice(message, 4000);
+					}
+				}
 				text.inputEl.classList.add('git-sync-config-field')
 
 				if (this.plugin.settings.isUsingSSH())
@@ -486,9 +513,9 @@ class GitSyncSettingTab extends PluginSettingTab {
 
 			})
 			.addToggle(async toggle => {
-				toggle.setValue(this.plugin.doAutoCommit)
+				toggle.setValue(this.plugin.settings.doAutoCommit)
 				toggle.onChange(async (value) => {
-					this.plugin.doAutoCommit = value;
+					this.plugin.settings.doAutoCommit = value;
 					await this.plugin.saveSettings();
 
 					let status = '';
@@ -519,7 +546,6 @@ class GitSyncSettingTab extends PluginSettingTab {
 				button.onClick(_ => {
 					if (this.plugin.settings.isConfigured) {
 						this.plugin.fetchVault()
-						this.plugin.statusBarText.textContent = 'Git Sync: Changes pulled';
 					} else {
 						new Notice('Your remote isn\'t fully configured', 4000);
 					}
@@ -536,7 +562,6 @@ class GitSyncSettingTab extends PluginSettingTab {
 				button.onClick(_ => {
 					if (this.plugin.settings.isConfigured) {
 						this.plugin.pushVault()
-						this.plugin.statusBarText.textContent = 'Git Sync: Changes Pushed';
 					} else {
 						new Notice('Your remote isn\'t fully configured', 4000);
 					}
@@ -554,7 +579,6 @@ class GitSyncSettingTab extends PluginSettingTab {
 				button.onClick(async _ => {
 					if (await this.plugin.git.checkIsRepo()) {
 						await this.plugin.deleteRepo();
-						this.plugin.statusBarText.textContent = 'Git Sync: Local repository deleted';
 
 						if (!await this.plugin.git.checkIsRepo()) {
 							this.plugin.settings.isRepo = false;
