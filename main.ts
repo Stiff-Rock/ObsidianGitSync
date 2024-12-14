@@ -259,6 +259,7 @@ export default class ObsidianGitSync extends Plugin {
 
 	async addAndCommitVault() {
 		if (await this.git.checkIsRepo()) {
+			let message = "Error adding and committing changes";
 			try {
 				await this.git.add('.');
 
@@ -273,11 +274,11 @@ export default class ObsidianGitSync extends Plugin {
 				});
 
 				await this.git.commit(`Changes at ${formattedDate}`);
-
+				message = 'Changes commited'
 				this.statusBarText.textContent = `Git Sync: Saved at ${formattedDate}`;
 			} catch (error) {
-				let message = "Error adding and committing changes";
 				console.error(message + ": ", error);
+			} finally {
 				new Notice(message, 3000);
 			}
 		} else {
@@ -286,6 +287,7 @@ export default class ObsidianGitSync extends Plugin {
 	}
 
 	async pushVault() {
+		let message = 'Error pushing changes to repository'
 		try {
 			await this.addAndCommitVault();
 
@@ -300,10 +302,11 @@ export default class ObsidianGitSync extends Plugin {
 			} else {
 				await this.git.push();
 			}
+			message = 'Pushed changes';
 			console.log('Pushed Changes')
 		} catch (error) {
-			let message = "Error pushing changes to repository";
 			console.log(message + ": ", error);
+		} finally {
 			new Notice(message, 3000);
 		}
 	}
@@ -326,13 +329,15 @@ export default class ObsidianGitSync extends Plugin {
 				}
 				console.log('Pulled Changes')
 			} else {
-				message = 'Nothing to pull';
+				message = 'Vault is already up-to-date';
 			}
 		} catch (error) {
 			message = "Error fetching from remote"
 			console.error(message + ": ", error);
+		} finally {
+			new Notice(message, 4000)
 		}
-		new Notice(message, 4000)
+
 	}
 
 	async closeApp() {
@@ -342,6 +347,7 @@ export default class ObsidianGitSync extends Plugin {
 	}
 }
 
+//TODO: When an action is working in the background, visibly disable buttons
 class GitSyncSettingTab extends PluginSettingTab {
 	plugin: ObsidianGitSync;
 
@@ -373,6 +379,10 @@ class GitSyncSettingTab extends PluginSettingTab {
 				text.inputEl.classList.add('git-sync-config-field');
 				text.inputEl.onblur = async (event: FocusEvent) => {
 					const value = (event.target as HTMLInputElement).value;
+
+					if (this.plugin.settings.gitHubRepo === value)
+						return
+
 					this.plugin.settings.gitHubRepo = value;
 
 					let message = 'Invalid Url, make sure it\'s https or ssh'
@@ -494,21 +504,21 @@ class GitSyncSettingTab extends PluginSettingTab {
 		// Toggle commit interval
 		this.toggleCommitIntervalSetting = new Setting(containerEl)
 			.setName('Auto Commit Timer')
-			.setDesc('Enables a timer which will save the vault periodically (in miliseconds). If let on 0 or empty, it will use the default value (60000).')
+			.setDesc('Sets auto-save interval in seconds. Empty input resets to default (60s), invalid values restore the last valid value.')
 			.addText(text => {
-				text.setValue('' + this.plugin.settings.intervalTime);
+				text.setValue('' + this.plugin.settings.intervalTime / 1000);
 				text.inputEl.setAttribute("type", "number");
 				text.inputEl.classList.add('git-sync-config-field');
 				text.onChange(async (value) => {
 					const intValue = parseInt(value, 10);
 
-					if (intValue < 0) {
-						text.setValue('' + this.plugin.settings.intervalTime);
+					if (value.trim() === "") {
+						this.plugin.settings.intervalTime = 60000;
+					} else if (isNaN(intValue) || !Number.isInteger(intValue) || intValue <= 0) {
+						text.setValue('' + this.plugin.settings.intervalTime / 1000);
 					} else {
-						this.plugin.settings.intervalTime = intValue;
+						this.plugin.settings.intervalTime = intValue * 1000;
 					}
-
-					await this.plugin.saveSettings();
 				})
 
 			})
@@ -521,10 +531,10 @@ class GitSyncSettingTab extends PluginSettingTab {
 					let status = '';
 
 					if (value) {
-						status = 'Enabled';
+						status = 'AutoCommit enabled';
 						(this.toggleCommitIntervalSetting.controlEl.querySelector('input[type="number"]') as HTMLInputElement).style.display = 'block';
 					} else {
-						status = 'Disabled';
+						status = 'AutoCommit disabled';
 						(this.toggleCommitIntervalSetting.controlEl.querySelector('input[type="number"]') as HTMLInputElement).style.display = 'none';
 					}
 
@@ -559,9 +569,9 @@ class GitSyncSettingTab extends PluginSettingTab {
 			.setDesc('Uploads the current state of the vault')
 			.addButton((button) => {
 				button.setButtonText('Push')
-				button.onClick(_ => {
+				button.onClick(async _ => {
 					if (this.plugin.settings.isConfigured) {
-						this.plugin.pushVault()
+						await this.plugin.pushVault()
 					} else {
 						new Notice('Your remote isn\'t fully configured', 4000);
 					}
