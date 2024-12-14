@@ -183,7 +183,7 @@ export default class ObsidianGitSync extends Plugin {
 			const isRepo = await this.git.checkIsRepo();
 
 			if (isRepo) {
-				message = "Repository already exists";
+				new Notice("Repository already exists", 4000);
 				return;
 			}
 
@@ -192,34 +192,14 @@ export default class ObsidianGitSync extends Plugin {
 					new Notice('You need to configure a PAT before initializing the repository', 4000);
 					return;
 				}
-
-				try {
-					await this.git.init()
-					await this.git.addRemote('origin', this.UrlWithPat());
-				} catch (remoteError) {
-					console.error("Error adding remote:", remoteError);
-					message = "Failed to add remote. Please check your repository URL.";
-					new Notice(message, 3000);
-					return;
-				}
+				await this.initRepoWithHTTPS();
 			} else if (this.settings.isUsingSSH()) {
 				new Notice('Your remote URL uses SSH, make sure you have configured it', 4000);
-				try {
-					await this.git.init()
-					await this.git.addRemote('origin', this.settings.gitHubRepo);
-				} catch (remoteError) {
-					console.error("Error adding remote:", remoteError);
-					message = "Failed to add remote. Please check your repository URL.";
-					new Notice(message, 3000);
-					return;
-				}
+				await this.initRepoWithSSH();
 			} else {
-				console.log(this.settings.gitHubRepo);
 				new Notice('Invalid or null repository URL', 4000);
 				return;
 			}
-
-			this.settings.isRepo = true;
 
 			try {
 				await this.git.fetch();
@@ -229,12 +209,32 @@ export default class ObsidianGitSync extends Plugin {
 				message = "Failed to authenticate with GitHub. Please check your credentials.";
 			}
 
-			console.log('Repository initialized')
+			console.log('Repository initialized');
 		} catch (error) {
 			console.error("Error initializing Git repo:", error);
 			message = "Error initializing repository. Please ensure Git is installed.";
 		} finally {
 			new Notice(message, 3000);
+		}
+	}
+
+	async initRepoWithHTTPS() {
+		try {
+			await this.git.init();
+			await this.git.addRemote('origin', this.UrlWithPat());
+		} catch (remoteError) {
+			console.error("Error adding remote:", remoteError);
+			new Notice("Failed to add remote. Please check your repository URL.", 3000);
+		}
+	}
+
+	async initRepoWithSSH() {
+		try {
+			await this.git.init();
+			await this.git.addRemote('origin', this.settings.gitHubRepo);
+		} catch (remoteError) {
+			console.error("Error adding remote:", remoteError);
+			new Notice("Failed to add remote. Please check your repository URL.", 3000);
 		}
 	}
 
@@ -335,9 +335,8 @@ export default class ObsidianGitSync extends Plugin {
 			message = "Error fetching from remote"
 			console.error(message + ": ", error);
 		} finally {
-			new Notice(message, 4000)
+			new Notice(message, 4000);
 		}
-
 	}
 
 	async closeApp() {
