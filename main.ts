@@ -386,8 +386,8 @@ class GitSyncSettingTab extends PluginSettingTab {
 
 					let message = 'Invalid Url, make sure it\'s https or ssh'
 					if (this.plugin.settings.isUsingHTTPS()) {
-						(this.githubPatSetting.controlEl.querySelector('input') as HTMLInputElement).style.display = 'block';
-						(this.githubUsernameSetting.controlEl.querySelector('input') as HTMLInputElement).style.display = 'block';
+						(this.githubPatSetting.controlEl.querySelector('input') as HTMLInputElement).disabled = false;
+						(this.githubUsernameSetting.controlEl.querySelector('input') as HTMLInputElement).disabled = false;
 
 						if (await this.plugin.git.checkIsRepo() && this.plugin.settings.gitHubPat !== '') {
 							await this.plugin.git.remote(['set-url', 'origin', value]);
@@ -404,8 +404,8 @@ class GitSyncSettingTab extends PluginSettingTab {
 							message = 'Valid HTTPS Url';
 						}
 					} else if (this.plugin.settings.isUsingSSH()) {
-						(this.githubPatSetting.controlEl.querySelector('input') as HTMLInputElement).style.display = 'none';
-						(this.githubUsernameSetting.controlEl.querySelector('input') as HTMLInputElement).style.display = 'none';
+						(this.githubPatSetting.controlEl.querySelector('input') as HTMLInputElement).disabled = true;
+						(this.githubUsernameSetting.controlEl.querySelector('input') as HTMLInputElement).disabled = true;
 
 						if (await this.plugin.git.checkIsRepo())
 							await this.plugin.git.remote(['set-url', 'origin', value]);
@@ -415,8 +415,8 @@ class GitSyncSettingTab extends PluginSettingTab {
 
 						await this.plugin.saveSettings();
 					} else {
-						(this.githubPatSetting.controlEl.querySelector('input') as HTMLInputElement).style.display = 'block';
-						(this.githubUsernameSetting.controlEl.querySelector('input') as HTMLInputElement).style.display = 'block';
+						(this.githubPatSetting.controlEl.querySelector('input') as HTMLInputElement).disabled = false;
+						(this.githubUsernameSetting.controlEl.querySelector('input') as HTMLInputElement).disabled = false;
 					}
 					new Notice(message, 4000)
 				};
@@ -458,7 +458,7 @@ class GitSyncSettingTab extends PluginSettingTab {
 				text.inputEl.classList.add('git-sync-config-field')
 
 				if (this.plugin.settings.isUsingSSH())
-					text.inputEl.style.display = 'none';
+					text.inputEl.disabled = true;
 			});
 
 		// GitHub Personal Acces Token
@@ -476,7 +476,7 @@ class GitSyncSettingTab extends PluginSettingTab {
 				text.inputEl.setAttribute("type", "password");
 
 				if (this.plugin.settings.isUsingSSH())
-					text.inputEl.style.display = 'none';
+					text.inputEl.disabled = true;
 			});
 
 		// Create repository button
@@ -488,16 +488,16 @@ class GitSyncSettingTab extends PluginSettingTab {
 				button.onClick(async _ => {
 					await this.plugin.createRepo()
 					if (await this.plugin.git.checkIsRepo()) {
-						button.buttonEl.style.display = 'none';
-						(this.toggleCommitIntervalSetting.controlEl.querySelector('input[type="checkbox"]') as HTMLInputElement).style.display = 'block';
-						(this.toggleCommitIntervalSetting.controlEl.querySelector('input[type="number"]') as HTMLInputElement).style.display = 'block';
-						(this.deleteRepoButtonSetting.controlEl.querySelector('button') as HTMLInputElement).style.display = 'block';
+						button.buttonEl.disabled = true;
+						(this.toggleCommitIntervalSetting.controlEl.querySelector('input[type="checkbox"]') as HTMLInputElement).disabled = false;
+						(this.toggleCommitIntervalSetting.controlEl.querySelector('input[type="number"]') as HTMLInputElement).disabled = false;
+						(this.deleteRepoButtonSetting.controlEl.querySelector('button') as HTMLInputElement).disabled = false;
 					}
 				})
 				button.buttonEl.classList.add('git-sync-config-field')
 
 				if (await this.plugin.git.checkIsRepo())
-					button.buttonEl.style.display = 'none';
+					button.buttonEl.disabled = true;
 			})
 
 		// Toggle commit interval
@@ -520,6 +520,8 @@ class GitSyncSettingTab extends PluginSettingTab {
 					}
 				})
 
+				if (!this.plugin.settings.doAutoCommit)
+					text.inputEl.disabled = true;
 			})
 			.addToggle(async toggle => {
 				toggle.setValue(this.plugin.settings.doAutoCommit)
@@ -531,18 +533,18 @@ class GitSyncSettingTab extends PluginSettingTab {
 
 					if (value) {
 						status = 'AutoCommit enabled';
-						(this.toggleCommitIntervalSetting.controlEl.querySelector('input[type="number"]') as HTMLInputElement).style.display = 'block';
+						(this.toggleCommitIntervalSetting.controlEl.querySelector('input[type="number"]') as HTMLInputElement).disabled = false;
 					} else {
 						status = 'AutoCommit disabled';
-						(this.toggleCommitIntervalSetting.controlEl.querySelector('input[type="number"]') as HTMLInputElement).style.display = 'none';
+						(this.toggleCommitIntervalSetting.controlEl.querySelector('input[type="number"]') as HTMLInputElement).disabled = true;
 					}
 
 					this.plugin.statusBarText.textContent = 'Git Sync: ' + status;
 				})
 
 				if (!await this.plugin.git.checkIsRepo()) {
-					toggle.toggleEl.style.display = 'none';
-					(this.toggleCommitIntervalSetting.controlEl.querySelector('input[type="number"]') as HTMLInputElement).style.display = 'none';
+					(toggle.toggleEl as HTMLInputElement).disabled = true;
+					(this.toggleCommitIntervalSetting.controlEl.querySelector('input[type="number"]') as HTMLInputElement).disabled = true;
 				}
 			});
 
@@ -591,8 +593,8 @@ class GitSyncSettingTab extends PluginSettingTab {
 
 						if (!await this.plugin.git.checkIsRepo()) {
 							this.plugin.settings.isRepo = false;
-							button.buttonEl.style.display = 'none';
-							(this.createRepoButtonSetting.controlEl.querySelector('button') as HTMLInputElement).style.display = 'block';
+							button.buttonEl.disabled = true;
+							(this.createRepoButtonSetting.controlEl.querySelector('button') as HTMLInputElement).disabled = false;
 						}
 					} else {
 						new Notice('No repository to delete', 4000);
@@ -600,7 +602,7 @@ class GitSyncSettingTab extends PluginSettingTab {
 				})
 
 				if (!await this.plugin.git.checkIsRepo())
-					button.buttonEl.style.display = 'none'
+					button.buttonEl.disabled = true;
 
 			})
 	}
