@@ -109,7 +109,7 @@ class GitSettings {
 
 //NOTE: Configure commands to control git
 //NOTE: Switch to GitHub REST API so it works on mobile or just make a separate plugin
-
+//FIX: A lot of errors when closing the app
 export default class ObsidianGitSync extends Plugin {
 	settings: GitSettings;
 	git: SimpleGit = simpleGit((this.app.vault.adapter as any).basePath);
@@ -120,17 +120,20 @@ export default class ObsidianGitSync extends Plugin {
 	async onload() {
 		await this.loadSettings();
 
-		if (await this.git.checkIsRepo())
-			await this.fetchVault();
+		// Check for local repos or newer versions and start the interval
+		this.app.workspace.onLayoutReady(async () => {
+			if (await this.git.checkIsRepo())
+				await this.fetchVault();
 
-		this.startGitInterval()
+			this.startGitInterval()
 
-		this.addSettingTab(new GitSyncSettingTab(this.app, this));
+			this.addSettingTab(new GitSyncSettingTab(this.app, this));
 
-		this.statusBarText = this.addStatusBarItem().createEl('span', { text: 'Git Sync: Started' });
+			this.statusBarText = this.addStatusBarItem().createEl('span', { text: 'Git Sync: Started' });
 
-		if (!this.settings.isConfigured)
-			this.statusBarText.textContent = 'Git Sync: Needs configuration';
+			if (!this.settings.isConfigured)
+				this.statusBarText.textContent = 'Git Sync: Needs configuration';
+		});
 
 		// Stop interval and commit changes right before closing the app
 		this.app.workspace.on('quit', (tasks: Tasks) => {
@@ -138,6 +141,10 @@ export default class ObsidianGitSync extends Plugin {
 				await this.closeApp();
 			});
 		});
+	}
+
+	async onLayoutReady() {
+
 	}
 
 	async onunload() {
