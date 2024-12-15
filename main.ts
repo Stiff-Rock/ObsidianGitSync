@@ -2,6 +2,7 @@ import { Plugin, PluginSettingTab, App, Setting, Notice, Tasks, TextComponent, B
 import simpleGit, { SimpleGit } from 'simple-git';
 import * as fs from 'fs';
 import * as path from 'path';
+import { NonFastForwardModal } from 'NonFastForwardModal';
 
 class GitSettings {
 	/*NOTE: Maybe add sepparate boolean values for the strings since you want to store 
@@ -303,43 +304,26 @@ export default class ObsidianGitSync extends Plugin {
 		let message = 'Error pushing changes to repository'
 		try {
 			await this.addAndCommitVault();
-
-			// Obtains the current local branch and the remote branches
-			const currentBranch = await this.git.revparse(['--abbrev-ref', 'HEAD']);
-			const remoteBranches = await this.git.branch(['-r']);
-
-			// Checks if the current local branch exists in the remote and if not it sets it as the main branch
-			if (remoteBranches.current !== currentBranch) {
-				await this.git.push(['--set-upstream', 'origin', currentBranch]);
-				console.log('Upstream branch set')
-			} else {
-				await this.git.push();
-			}
+			await this.git.push();
 			message = 'Pushed changes';
-			console.log('Pushed Changes')
+			console.log(message)
 		} catch (error) {
-			if (error.message.includes('non-fast-forward')) {
-				try {
-					console.log('Non-fast-forward error detected, pulling changes...');
-
-					// Perform a git pull to integrate the remote changes
-					await this.git.pull(['--rebase']);  // Use --rebase to avoid merge commits
-					console.log('Successfully pulled changes');
-
-					// Retry pushing after pulling the remote changes
-					await this.git.push();
-					message = 'Pushed changes after pulling remote updates';
-
-					console.log(message);
-				} catch (pullError) {
-					message = 'Error during pull or push: ' + pullError.message;
-					console.log(message);
-				}
+			if (error.message.includes('--set-upstream')) {
+				const currentBranch = await this.git.revparse(['--abbrev-ref', 'HEAD']);
+				this.git.push(['--set-upstream', 'origin', currentBranch]);
+				message = 'Upstream branch set to master and pushed changes';
+				console.log(message);
+			}
+			else if (error.message.includes('non-fast-forward')) {
+				await this.openNonFastFowardModal();
+			} else if (error.message.includes('[rejected] (fetch first)')) {
+				//HACK: Temporal solution is to just pull, but that will fuck up the vault and will need manual sorting.
+				this.git.pull();
 			} else {
 				console.log(message + ": ", error);
 			}
 		} finally {
-			new Notice(message, 3000);
+			new Notice(message, 4000);
 		}
 	}
 
@@ -368,6 +352,33 @@ export default class ObsidianGitSync extends Plugin {
 			console.error(message + ": ", error);
 		} finally {
 			new Notice(message, 4000);
+		}
+	}
+
+	async openNonFastFowardModal(): Promise<string> {
+		const accept = await new Promise<boolean>((resolve) => {
+			new NonFastForwardModal(this.app, resolve).open();
+		});
+
+		if (accept)
+			return await this.pullRebase();
+		else
+			return "Error pulling from remote";
+	}
+
+	async pullRebase(): Promise<string> {
+		try {
+			console.log('Non-fast-forward error detected, pulling changes...');
+
+			await this.git.pull(['--rebase']);
+			console.log('Successfully pulled changes');
+
+			await this.pushVault();
+			console.log('Pushed changes after pulling remote updates');
+			return 'Pushed changes after pulling remote updates'
+		} catch (pullError) {
+			console.log('Error during pull or push: ' + pullError.message);
+			return "Error pulling from remote";
 		}
 	}
 
