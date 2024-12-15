@@ -1,4 +1,4 @@
-import { Plugin, PluginSettingTab, App, Setting, Notice, Tasks } from 'obsidian';
+import { Plugin, PluginSettingTab, App, Setting, Notice, Tasks, TextComponent, ButtonComponent, ToggleComponent } from 'obsidian';
 import simpleGit, { SimpleGit } from 'simple-git';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -8,15 +8,15 @@ class GitSettings {
 	* whatever the user types but that does not mean that the values are correct. 
 	* Notify of those missing configs through the status bar*/
 
-	private _gitHubRepo: string;
-	private _gitHubUser: string;
-	private _gitHubPat: string
+	private _gitHubRepo: string = '';
+	private _gitHubUser: string = '';
+	private _gitHubPat: string = '';
 
-	private _isRepo: boolean;
-	private _isConfigured: boolean;
+	private _isRepo: boolean = false;
+	private _isConfigured: boolean = false;
 
-	private _doAutoCommit: boolean;
-	private _intervalTime: number;
+	private _doAutoCommit: boolean = true;
+	private _intervalTime: number = 60000;
 
 	constructor(data?: Partial<GitSettings>) {
 		if (data) {
@@ -38,9 +38,10 @@ class GitSettings {
 
 	// Checks the conditions that are required for the plugin to be considered as configured
 	private checkAllSet(): void {
-		this._isConfigured = !!this.isRepo &&
-			!!this._gitHubRepo &&
-			(this.isUsingSSH() || (this.isUsingHTTPS() && !!this._gitHubUser && !!this._gitHubPat));
+		if (this._isRepo && this._gitHubRepo && (this.isUsingSSH() || (this.isUsingHTTPS() && this._gitHubUser && this._gitHubPat)))
+			this._isConfigured = true;
+		else
+			this._isConfigured = false;
 	}
 
 	// gitHubRepo getters and setters
@@ -108,7 +109,8 @@ class GitSettings {
 }
 
 //NOTE: Switch to GitHub REST API so it works on mobile or just make a separate plugin
-//FIX: A lot of errors when closing the app
+//FIX: falta auto pull al abrir si esta configurado, arrelgar casos de conflcito un un pop up
+
 export default class ObsidianGitSync extends Plugin {
 	settings: GitSettings;
 	git: SimpleGit = simpleGit((this.app.vault.adapter as any).basePath);
@@ -131,6 +133,8 @@ export default class ObsidianGitSync extends Plugin {
 			this.addSettingTab(new GitSyncSettingTab(this.app, this));
 
 			this.statusBarText = this.addStatusBarItem().createEl('span', { text: 'Git Sync: Started' });
+
+			this.settings.isRepo = await this.git.checkIsRepo();
 
 			if (!this.settings.isConfigured)
 				this.statusBarText.textContent = 'Git Sync: Needs configuration';
@@ -201,10 +205,13 @@ export default class ObsidianGitSync extends Plugin {
 				await this.initRepoWithSSH();
 			} else {
 				message = 'Invalid or null repository URL';
+				return;
 			}
 
+			this.settings.isRepo = true;
+
 			try {
-				await this.git.fetch();
+				this.fetchVault();
 				message = "Git repository initialized and remote added successfully.";
 			} catch (authError) {
 				console.error("Authentication error:", authError);
@@ -245,6 +252,7 @@ export default class ObsidianGitSync extends Plugin {
 			if (await this.git.checkIsRepo()) {
 				const gitDir = path.join((this.app.vault.adapter as any).basePath, '.git');
 				fs.rmSync(gitDir, { recursive: true, force: true });
+				this.settings.isRepo = false;
 				console.log('Repository deleted')
 			}
 		} catch (err) {
@@ -289,6 +297,9 @@ export default class ObsidianGitSync extends Plugin {
 	}
 
 	async pushVault() {
+		if (!await this.git.checkIsRepo())
+			return;
+
 		let message = 'Error pushing changes to repository'
 		try {
 			await this.addAndCommitVault();
@@ -307,7 +318,26 @@ export default class ObsidianGitSync extends Plugin {
 			message = 'Pushed changes';
 			console.log('Pushed Changes')
 		} catch (error) {
-			console.log(message + ": ", error);
+			if (error.message.includes('non-fast-forward')) {
+				try {
+					console.log('Non-fast-forward error detected, pulling changes...');
+
+					// Perform a git pull to integrate the remote changes
+					await this.git.pull(['--rebase']);  // Use --rebase to avoid merge commits
+					console.log('Successfully pulled changes');
+
+					// Retry pushing after pulling the remote changes
+					await this.git.push();
+					message = 'Pushed changes after pulling remote updates';
+
+					console.log(message);
+				} catch (pullError) {
+					message = 'Error during pull or push: ' + pullError.message;
+					console.log(message);
+				}
+			} else {
+				console.log(message + ": ", error);
+			}
 		} finally {
 			new Notice(message, 3000);
 		}
@@ -399,7 +429,7 @@ export default class ObsidianGitSync extends Plugin {
 					console.log('Git Sync interval stopped.');
 				} else {
 					// If the interval is not running, start it
-					await this.startGitInterval();
+					this.startGitInterval();
 					console.log('Git Sync interval started.');
 				}
 			},
@@ -416,14 +446,17 @@ export default class ObsidianGitSync extends Plugin {
 class GitSyncSettingTab extends PluginSettingTab {
 	plugin: ObsidianGitSync;
 
-	gitHubRepoSettign: Setting
-	githubPatSetting: Setting
-	githubUsernameSetting: Setting
-	createRepoButtonSetting: Setting
-	deleteRepoButtonSetting: Setting
-	pushButtonSetting: Setting
-	fetchButtonSetting: Setting
-	toggleCommitIntervalSetting: Setting
+	gitHubRepoText: TextComponent
+	gitHubPatText: TextComponent
+	gitHubUsernameText: TextComponent
+
+	createRepoButton: ButtonComponent
+	deleteRepoButton: ButtonComponent
+	pushButton: ButtonComponent
+	fetchButton: ButtonComponent
+
+	autoCommitToggleButton: ToggleComponent
+	intervalTimeText: TextComponent
 
 	constructor(app: App, plugin: ObsidianGitSync) {
 		super(app, plugin);
@@ -436,10 +469,11 @@ class GitSyncSettingTab extends PluginSettingTab {
 		containerEl.empty();
 
 		// Repository Remote Url
-		this.gitHubRepoSettign = new Setting(containerEl)
+		new Setting(containerEl)
 			.setName('GitHub Repository Url')
 			.setDesc('The Url of the GitHub repository that will store the vault. Use HTTPS unless you have SSH auth configured')
 			.addText(text => {
+				this.gitHubRepoText = text;
 				text.setPlaceholder('Repository Url')
 				text.setValue(this.plugin.settings.gitHubRepo);
 				text.inputEl.classList.add('git-sync-config-field');
@@ -453,9 +487,9 @@ class GitSyncSettingTab extends PluginSettingTab {
 
 					let message = 'Invalid Url, make sure it\'s https or ssh'
 					if (this.plugin.settings.isUsingHTTPS()) {
-						(this.githubPatSetting.controlEl.querySelector('input') as HTMLInputElement).disabled = false;
-						(this.githubUsernameSetting.controlEl.querySelector('input') as HTMLInputElement).disabled = false;
-
+						console.log('HTTPS Url')
+						this.gitHubPatText.inputEl.disabled = false;
+						this.gitHubUsernameText.inputEl.disabled = false;
 						if (await this.plugin.git.checkIsRepo() && this.plugin.settings.gitHubPat !== '') {
 							await this.plugin.git.remote(['set-url', 'origin', value]);
 							try {
@@ -471,8 +505,9 @@ class GitSyncSettingTab extends PluginSettingTab {
 							message = 'Valid HTTPS Url';
 						}
 					} else if (this.plugin.settings.isUsingSSH()) {
-						(this.githubPatSetting.controlEl.querySelector('input') as HTMLInputElement).disabled = true;
-						(this.githubUsernameSetting.controlEl.querySelector('input') as HTMLInputElement).disabled = true;
+						console.log('SSH Url')
+						this.gitHubPatText.inputEl.disabled = true;
+						this.gitHubUsernameText.inputEl.disabled = true;
 
 						if (await this.plugin.git.checkIsRepo())
 							await this.plugin.git.remote(['set-url', 'origin', value]);
@@ -482,18 +517,19 @@ class GitSyncSettingTab extends PluginSettingTab {
 
 						await this.plugin.saveSettings();
 					} else {
-						(this.githubPatSetting.controlEl.querySelector('input') as HTMLInputElement).disabled = false;
-						(this.githubUsernameSetting.controlEl.querySelector('input') as HTMLInputElement).disabled = false;
+						this.gitHubPatText.inputEl.disabled = false;
+						this.gitHubUsernameText.inputEl.disabled = false;
 					}
 					new Notice(message, 4000)
 				};
 			});
 
 		// GitHub Username
-		this.githubUsernameSetting = new Setting(containerEl)
+		new Setting(containerEl)
 			.setName('GitHub Username')
 			.setDesc('Your GitHub username (Not needed if you are using an SSH url).')
 			.addText(text => {
+				this.gitHubUsernameText = text;
 				text.setPlaceholder('Username')
 				text.setValue(this.plugin.settings.gitHubUser)
 				text.inputEl.onblur = async (event: FocusEvent) => {
@@ -529,10 +565,11 @@ class GitSyncSettingTab extends PluginSettingTab {
 			});
 
 		// GitHub Personal Acces Token
-		this.githubPatSetting = new Setting(containerEl)
+		new Setting(containerEl)
 			.setName('GitHub PAT')
 			.setDesc('Personal access token to authenticate yourself. (If you are using an SSH url you don\'t need to fill this field).')
 			.addText((text) => {
+				this.gitHubPatText = text;
 				text.setPlaceholder('Personal Acces Token')
 				text.setValue(this.plugin.settings.gitHubPat)
 				text.onChange(async value => {
@@ -547,23 +584,26 @@ class GitSyncSettingTab extends PluginSettingTab {
 			});
 
 		// Create repository button
-		this.createRepoButtonSetting = new Setting(containerEl)
+		new Setting(containerEl)
 			.setName('Create vault repository')
 			.setDesc('Creates the local repository if not done yet')
 			.addButton(async button => {
+				this.createRepoButton = button;
 				button.setButtonText('Create repository')
 				button.onClick(async _ => {
-					this.disableAllFields();
+					await this.disableAllFields();
 
 					await this.plugin.createRepo()
 					if (await this.plugin.git.checkIsRepo()) {
-						button.buttonEl.disabled = true;
-						(this.toggleCommitIntervalSetting.controlEl.querySelector('input[type="checkbox"]') as HTMLInputElement).disabled = false;
-						(this.toggleCommitIntervalSetting.controlEl.querySelector('input[type="number"]') as HTMLInputElement).disabled = false;
-						(this.deleteRepoButtonSetting.controlEl.querySelector('button') as HTMLInputElement).disabled = false;
-					}
+						await this.enableAllFields();
 
-					this.enableAllFields();
+						button.buttonEl.disabled = true;
+						this.autoCommitToggleButton.disabled = false;
+						this.intervalTimeText.inputEl.disabled = false;
+						this.deleteRepoButton.buttonEl.disabled = false;
+						this.fetchButton.buttonEl.disabled = false;
+						this.pushButton.buttonEl.disabled = false;
+					}
 				})
 				button.buttonEl.classList.add('git-sync-config-field')
 
@@ -572,10 +612,11 @@ class GitSyncSettingTab extends PluginSettingTab {
 			})
 
 		// Toggle commit interval
-		this.toggleCommitIntervalSetting = new Setting(containerEl)
+		new Setting(containerEl)
 			.setName('Auto Commit Timer')
 			.setDesc('Sets auto-save interval in seconds. Empty input resets to default (60s), invalid values restore the last valid value.')
 			.addText(text => {
+				this.intervalTimeText = text;
 				text.setValue('' + this.plugin.settings.intervalTime / 1000);
 				text.inputEl.setAttribute("type", "number");
 				text.inputEl.classList.add('git-sync-config-field');
@@ -595,6 +636,7 @@ class GitSyncSettingTab extends PluginSettingTab {
 					text.inputEl.disabled = true;
 			})
 			.addToggle(async toggle => {
+				this.autoCommitToggleButton = toggle;
 				toggle.setValue(this.plugin.settings.doAutoCommit)
 				toggle.onChange(async (value) => {
 					this.plugin.settings.doAutoCommit = value;
@@ -604,49 +646,56 @@ class GitSyncSettingTab extends PluginSettingTab {
 
 					if (value) {
 						status = 'AutoCommit enabled';
-						(this.toggleCommitIntervalSetting.controlEl.querySelector('input[type="number"]') as HTMLInputElement).disabled = false;
+						this.intervalTimeText.inputEl.disabled = false;
 					} else {
 						status = 'AutoCommit disabled';
-						(this.toggleCommitIntervalSetting.controlEl.querySelector('input[type="number"]') as HTMLInputElement).disabled = true;
+						this.intervalTimeText.inputEl.disabled = true;
 					}
 
 					this.plugin.statusBarText.textContent = 'Git Sync: ' + status;
 				})
 
 				if (!await this.plugin.git.checkIsRepo()) {
-					(toggle.toggleEl as HTMLInputElement).disabled = true;
-					(this.toggleCommitIntervalSetting.controlEl.querySelector('input[type="number"]') as HTMLInputElement).disabled = true;
+					toggle.disabled = true;
+					this.intervalTimeText.inputEl.disabled = true;
 				}
 			});
 
 		// Fetch button
-		this.fetchButtonSetting = new Setting(containerEl)
+		new Setting(containerEl)
 			.setName('Fetch Vault')
 			.setDesc('Checks for a new version of the vault and donwloads it')
-			.addButton((button) => {
+			.addButton(async button => {
+				this.fetchButton = button;
 				button.setButtonText('Fetch')
 				button.buttonEl.classList.add('git-sync-config-field')
 				button.onClick(async _ => {
-					this.disableAllFields();
+					await this.disableAllFields();
 
 					if (this.plugin.settings.isConfigured) {
 						await this.plugin.fetchVault()
 					} else {
+						console.log(this.plugin.settings)
 						new Notice('Your remote isn\'t fully configured', 4000);
 					}
 
-					this.enableAllFields();
+					await this.enableAllFields();
 				})
+
+				if (!await this.plugin.git.checkIsRepo())
+					button.buttonEl.disabled = true;
 			})
 
 		// Push button
-		this.pushButtonSetting = new Setting(containerEl)
+		new Setting(containerEl)
 			.setName('Push Vault')
 			.setDesc('Uploads the current state of the vault')
-			.addButton((button) => {
+			.addButton(async button => {
+				this.pushButton = button;
 				button.setButtonText('Push')
+				button.buttonEl.classList.add('git-sync-config-field')
 				button.onClick(async _ => {
-					this.disableAllFields();
+					await this.disableAllFields();
 
 					if (this.plugin.settings.isConfigured) {
 						await this.plugin.pushVault()
@@ -654,34 +703,43 @@ class GitSyncSettingTab extends PluginSettingTab {
 						new Notice('Your remote isn\'t fully configured', 4000);
 					}
 
-					this.enableAllFields();
+					await this.enableAllFields();
 				})
-				button.buttonEl.classList.add('git-sync-config-field')
+
+				if (!await this.plugin.git.checkIsRepo())
+					button.buttonEl.disabled = true;
 			})
 
 		// Delete repository button
-		this.deleteRepoButtonSetting = new Setting(containerEl)
+		new Setting(containerEl)
 			.setName('Delte repository')
 			.setDesc('Deletes the local repository permanently')
 			.addButton(async button => {
+				this.deleteRepoButton = button;
 				button.setButtonText('Delete')
 				button.buttonEl.id = 'delete-btn';
 				button.onClick(async _ => {
-					this.disableAllFields();
+					await this.disableAllFields();
 
 					if (await this.plugin.git.checkIsRepo()) {
 						await this.plugin.deleteRepo();
 
 						if (!await this.plugin.git.checkIsRepo()) {
+							await this.enableAllFields();
+
 							this.plugin.settings.isRepo = false;
+
 							button.buttonEl.disabled = true;
-							(this.createRepoButtonSetting.controlEl.querySelector('button') as HTMLInputElement).disabled = false;
+							this.pushButton.buttonEl.disabled = true;
+							this.fetchButton.buttonEl.disabled = true;
+							this.intervalTimeText.inputEl.disabled = true;
+							this.autoCommitToggleButton.disabled = true;
+
+							this.createRepoButton.buttonEl.disabled = false;
 						}
 					} else {
 						new Notice('No repository to delete', 4000);
 					}
-
-					this.enableAllFields();
 				})
 
 				if (!await this.plugin.git.checkIsRepo())
@@ -690,48 +748,39 @@ class GitSyncSettingTab extends PluginSettingTab {
 			})
 	}
 
-	enabledElements: (HTMLInputElement | HTMLButtonElement)[] = [];
+	enabledFields: (HTMLInputElement | HTMLButtonElement | ToggleComponent)[] = [];
 
-	disableAllFields() {
-		this.enabledElements = [];
+	async disableAllFields() {
+		this.enabledFields = [];
 
-		const inputs = [
-			this.gitHubRepoSettign.controlEl.querySelector('input') as HTMLInputElement,
-			this.githubPatSetting.controlEl.querySelector('input') as HTMLInputElement,
-			this.githubUsernameSetting.controlEl.querySelector('input') as HTMLInputElement,
-			this.toggleCommitIntervalSetting.controlEl.querySelector('input[type="number"]') as HTMLInputElement,
-			this.toggleCommitIntervalSetting.controlEl.querySelector('input[type="checkbox"]') as HTMLInputElement,
-		];
+		const fields = [
+			this.gitHubRepoText.inputEl,
+			this.gitHubPatText.inputEl,
+			this.gitHubUsernameText.inputEl,
+			this.createRepoButton.buttonEl,
+			this.deleteRepoButton.buttonEl,
+			this.pushButton.buttonEl,
+			this.fetchButton.buttonEl,
+			this.autoCommitToggleButton,
+			this.intervalTimeText.inputEl
+		]
 
-		inputs.forEach(input => {
-			if (input && !input.disabled) {
-				this.enabledElements.push(input);
-				input.disabled = true;
+		for (const field of fields) {
+			if (!field.disabled) {
+				this.enabledFields.push(field);
+				field.disabled = true;
 			}
-		});
-
-		const buttons = [
-			this.createRepoButtonSetting.controlEl.querySelector('button') as HTMLButtonElement,
-			this.deleteRepoButtonSetting.controlEl.querySelector('button') as HTMLButtonElement,
-			this.pushButtonSetting.controlEl.querySelector('button') as HTMLButtonElement,
-			this.fetchButtonSetting.controlEl.querySelector('button') as HTMLButtonElement
-		];
-
-		buttons.forEach(button => {
-			if (button && !button.disabled) {
-				this.enabledElements.push(button);
-				button.disabled = true;
-			}
-		});
+		}
 
 		document.body.style.cursor = "progress";
 	}
 
-	enableAllFields() {
-		this.enabledElements.forEach(element => {
-			element.disabled = false;
-		});
-		this.enabledElements = [];
+	async enableAllFields() {
+		for (const field of this.enabledFields) {
+			field.disabled = false;
+		}
+
+		this.enabledFields = [];
 
 		document.body.style.cursor = "default";
 	}

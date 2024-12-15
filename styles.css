@@ -9,7 +9,8 @@
 }
 
 input:disabled,
-button:disabled {
+button:disabled,
+#delete-btn:disabled {
 	background-color: #505050;
 	color: #808080;
 	cursor: not-allowed;
