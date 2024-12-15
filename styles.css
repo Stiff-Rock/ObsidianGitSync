@@ -1,6 +1,7 @@
 .git-sync-config-field,
 #delete-btn {
 	width: 200px;
+	transition: 0.3s ease-in-out;
 }
 
 #delete-btn {

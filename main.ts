@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 class GitSettings {
-	/*NOTE: add sepparate boolean values for the strings since you want to store 
+	/*NOTE: Add sepparate boolean values for the strings since you want to store 
 	* whatever the user types but that does not mean that the values are correct. 
 	* Notify of those missing configs through the status bar*/
 
@@ -110,7 +110,6 @@ class GitSettings {
 //NOTE: Configure commands to control git
 //NOTE: Switch to GitHub REST API so it works on mobile or just make a separate plugin
 
-//TODO: Instead of hiding the fields, make them unclickable
 export default class ObsidianGitSync extends Plugin {
 	settings: GitSettings;
 	git: SimpleGit = simpleGit((this.app.vault.adapter as any).basePath);
@@ -346,10 +345,10 @@ export default class ObsidianGitSync extends Plugin {
 	}
 }
 
-//TODO: When an action is working in the background, visibly disable buttons
 class GitSyncSettingTab extends PluginSettingTab {
 	plugin: ObsidianGitSync;
 
+	gitHubRepoSettign: Setting
 	githubPatSetting: Setting
 	githubUsernameSetting: Setting
 	createRepoButtonSetting: Setting
@@ -369,7 +368,7 @@ class GitSyncSettingTab extends PluginSettingTab {
 		containerEl.empty();
 
 		// Repository Remote Url
-		new Setting(containerEl)
+		this.gitHubRepoSettign = new Setting(containerEl)
 			.setName('GitHub Repository Url')
 			.setDesc('The Url of the GitHub repository that will store the vault. Use HTTPS unless you have SSH auth configured')
 			.addText(text => {
@@ -486,6 +485,8 @@ class GitSyncSettingTab extends PluginSettingTab {
 			.addButton(async button => {
 				button.setButtonText('Create repository')
 				button.onClick(async _ => {
+					this.disableAllFields();
+
 					await this.plugin.createRepo()
 					if (await this.plugin.git.checkIsRepo()) {
 						button.buttonEl.disabled = true;
@@ -493,6 +494,8 @@ class GitSyncSettingTab extends PluginSettingTab {
 						(this.toggleCommitIntervalSetting.controlEl.querySelector('input[type="number"]') as HTMLInputElement).disabled = false;
 						(this.deleteRepoButtonSetting.controlEl.querySelector('button') as HTMLInputElement).disabled = false;
 					}
+
+					this.enableAllFields();
 				})
 				button.buttonEl.classList.add('git-sync-config-field')
 
@@ -554,14 +557,18 @@ class GitSyncSettingTab extends PluginSettingTab {
 			.setDesc('Checks for a new version of the vault and donwloads it')
 			.addButton((button) => {
 				button.setButtonText('Fetch')
-				button.onClick(_ => {
+				button.buttonEl.classList.add('git-sync-config-field')
+				button.onClick(async _ => {
+					this.disableAllFields();
+
 					if (this.plugin.settings.isConfigured) {
-						this.plugin.fetchVault()
+						await this.plugin.fetchVault()
 					} else {
 						new Notice('Your remote isn\'t fully configured', 4000);
 					}
+
+					this.enableAllFields();
 				})
-				button.buttonEl.classList.add('git-sync-config-field')
 			})
 
 		// Push button
@@ -571,11 +578,15 @@ class GitSyncSettingTab extends PluginSettingTab {
 			.addButton((button) => {
 				button.setButtonText('Push')
 				button.onClick(async _ => {
+					this.disableAllFields();
+
 					if (this.plugin.settings.isConfigured) {
 						await this.plugin.pushVault()
 					} else {
 						new Notice('Your remote isn\'t fully configured', 4000);
 					}
+
+					this.enableAllFields();
 				})
 				button.buttonEl.classList.add('git-sync-config-field')
 			})
@@ -588,6 +599,8 @@ class GitSyncSettingTab extends PluginSettingTab {
 				button.setButtonText('Delete')
 				button.buttonEl.id = 'delete-btn';
 				button.onClick(async _ => {
+					this.disableAllFields();
+
 					if (await this.plugin.git.checkIsRepo()) {
 						await this.plugin.deleteRepo();
 
@@ -599,12 +612,60 @@ class GitSyncSettingTab extends PluginSettingTab {
 					} else {
 						new Notice('No repository to delete', 4000);
 					}
+
+					this.enableAllFields();
 				})
 
 				if (!await this.plugin.git.checkIsRepo())
 					button.buttonEl.disabled = true;
 
 			})
+	}
+
+	enabledElements: (HTMLInputElement | HTMLButtonElement)[] = [];
+
+	disableAllFields() {
+		this.enabledElements = [];
+
+		const inputs = [
+			this.gitHubRepoSettign.controlEl.querySelector('input') as HTMLInputElement,
+			this.githubPatSetting.controlEl.querySelector('input') as HTMLInputElement,
+			this.githubUsernameSetting.controlEl.querySelector('input') as HTMLInputElement,
+			this.toggleCommitIntervalSetting.controlEl.querySelector('input[type="number"]') as HTMLInputElement,
+			this.toggleCommitIntervalSetting.controlEl.querySelector('input[type="checkbox"]') as HTMLInputElement,
+		];
+
+		inputs.forEach(input => {
+			if (input && !input.disabled) {
+				this.enabledElements.push(input);
+				input.disabled = true;
+			}
+		});
+
+		const buttons = [
+			this.createRepoButtonSetting.controlEl.querySelector('button') as HTMLButtonElement,
+			this.deleteRepoButtonSetting.controlEl.querySelector('button') as HTMLButtonElement,
+			this.pushButtonSetting.controlEl.querySelector('button') as HTMLButtonElement,
+			this.fetchButtonSetting.controlEl.querySelector('button') as HTMLButtonElement
+		];
+
+		buttons.forEach(button => {
+			if (button && !button.disabled) {
+				this.enabledElements.push(button);
+				button.disabled = true;
+			}
+		});
+
+		document.body.style.cursor = "progress";
+	}
+
+	enableAllFields() {
+		this.enabledElements.forEach(element => {
+			element.disabled = false;
+		});
+		this.enabledElements = [];
+
+		document.body.style.cursor = "default";
 	}
 }
 
