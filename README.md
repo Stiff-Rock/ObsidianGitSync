@@ -23,17 +23,23 @@
 
 ## Getting Started
 
-1. **Add Your Repository**: Enter your GitHub URL in `Settings > Obsidian Git Sync`.
+1. **Add Your Repository**: Enter your GitHub repository URL in `Settings > Obsidian Git Sync`.
 2. **Set Up Authentication**: 
-   - For HTTPS, use a Personal Access Token.
-   - For SSH, ensure SSH authentication is configured in GitHub.
+   - For HTTPS, use a Personal Access Token and ensure you enter your GitHub username.
+   - For SSH, make sure SSH authentication is configured both in GitHub and on your computer.
 3. **Sync Your Vault**: Commit, push, pull, or enable auto-commit for automatic syncing.
 
 ---
 
+## Future Plans
+
+- **Mobile Version**: I am planning to create a mobile version, but it will be a slow development process since I work on this as a hobby in my free time. Stay tuned for updates!
+
+---
 ## Report an Issue
 
-Feel free to contact me to report any errors or issues.
+Feel free to contact me to report any errors or issues. 
+Please note that this is a very informal project and I'm no profesional. While I try to keep things working smoothly, there may be occasional bugs or incomplete features. Your feedback is always appreciated!!
 
 ---
 
