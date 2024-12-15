@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 class GitSettings {
-	/*NOTE: Add sepparate boolean values for the strings since you want to store 
+	/*NOTE: Maybe add sepparate boolean values for the strings since you want to store 
 	* whatever the user types but that does not mean that the values are correct. 
 	* Notify of those missing configs through the status bar*/
 
@@ -107,7 +107,6 @@ class GitSettings {
 	}
 }
 
-//NOTE: Configure commands to control git
 //NOTE: Switch to GitHub REST API so it works on mobile or just make a separate plugin
 //FIX: A lot of errors when closing the app
 export default class ObsidianGitSync extends Plugin {
@@ -119,6 +118,8 @@ export default class ObsidianGitSync extends Plugin {
 
 	async onload() {
 		await this.loadSettings();
+
+		this.loadCommands();
 
 		// Check for local repos or newer versions and start the interval
 		this.app.workspace.onLayoutReady(async () => {
@@ -141,10 +142,6 @@ export default class ObsidianGitSync extends Plugin {
 				await this.closeApp();
 			});
 		});
-	}
-
-	async onLayoutReady() {
-
 	}
 
 	async onunload() {
@@ -189,22 +186,21 @@ export default class ObsidianGitSync extends Plugin {
 			const isRepo = await this.git.checkIsRepo();
 
 			if (isRepo) {
-				new Notice("Repository already exists", 4000);
+				message = "Repository already exists";
 				return;
 			}
 
 			if (this.settings.isUsingHTTPS()) {
 				if (!this.settings.gitHubPat) {
-					new Notice('You need to configure a PAT before initializing the repository', 4000);
+					message = 'You need to configure a PAT before initializing the repository'
 					return;
 				}
 				await this.initRepoWithHTTPS();
 			} else if (this.settings.isUsingSSH()) {
-				new Notice('Your remote URL uses SSH, make sure you have configured it', 4000);
+				message = 'Your remote URL uses SSH, make sure you have configured it';
 				await this.initRepoWithSSH();
 			} else {
-				new Notice('Invalid or null repository URL', 4000);
-				return;
+				message = 'Invalid or null repository URL';
 			}
 
 			try {
@@ -343,6 +339,71 @@ export default class ObsidianGitSync extends Plugin {
 		} finally {
 			new Notice(message, 4000);
 		}
+	}
+
+	// adds the commads to init, delete, commit, push, fetch, and toggle the interval
+	async loadCommands() {
+		// Command to initialize the Git repository
+		this.addCommand({
+			id: 'create-repo',
+			name: 'Create Git Repository',
+			callback: async () => {
+				await this.createRepo();
+			},
+		});
+
+		// Command to delete the Git repository
+		this.addCommand({
+			id: 'delete-repo',
+			name: 'Delete Git Repository',
+			callback: async () => {
+				await this.deleteRepo();
+			},
+		});
+
+		// Command to commit changes to the Git repository
+		this.addCommand({
+			id: 'commit-changes',
+			name: 'Commit Changes',
+			callback: async () => {
+				await this.addAndCommitVault();
+			},
+		});
+
+		// Command to push changes to the Git repository
+		this.addCommand({
+			id: 'push-changes',
+			name: 'Push Changes',
+			callback: async () => {
+				await this.pushVault();
+			},
+		});
+
+		// Command to fetch changes from the remote repository
+		this.addCommand({
+			id: 'fetch-changes',
+			name: 'Fetch Changes',
+			callback: async () => {
+				await this.fetchVault();
+			},
+		});
+
+		// Command to toggle the auto-sync interval on or off
+		this.addCommand({
+			id: 'toggle-interval',
+			name: 'Toggle Git Sync Interval',
+			callback: async () => {
+				if (this.gitIntervalId) {
+					// If the interval is running, stop it
+					await this.stopGitInterval();
+					console.log('Git Sync interval stopped.');
+				} else {
+					// If the interval is not running, start it
+					await this.startGitInterval();
+					console.log('Git Sync interval started.');
+				}
+			},
+		});
 	}
 
 	async closeApp() {
