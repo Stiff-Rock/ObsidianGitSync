@@ -28,7 +28,7 @@ jobs:
 
       - name: Create release into zip archive
         run: |
-          zip -r "ObsidianGitSync-${TAG}.zip" main.js manifest.json styles.css README.md LICENSE.txt
+          zip -r "GitSync-${TAG}.zip" main.js manifest.json styles.css README.md LICENSE.txt
 
       - name: Create release
         env:
@@ -37,6 +37,6 @@ jobs:
           gh release create "$TAG" \
             --title "$TAG" \
             --draft \
-            "ObsidianGitSync-${TAG}.zip"
+            "GitSync-${TAG}.zip"
 
 

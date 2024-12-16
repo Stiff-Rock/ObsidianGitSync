@@ -111,7 +111,7 @@ class GitSettings {
 //NOTE: Switch to GitHub REST API so it works on mobile or just make a separate plugin
 //FIX: falta auto pull al abrir si esta configurado, arrelgar casos de conflcito un un pop up
 
-export default class ObsidianGitSync extends Plugin {
+export default class GitSync extends Plugin {
 	settings: GitSettings;
 	git: SimpleGit = simpleGit((this.app.vault.adapter as any).basePath);
 	gitIntervalId: NodeJS.Timer;
@@ -454,7 +454,7 @@ export default class ObsidianGitSync extends Plugin {
 }
 
 class GitSyncSettingTab extends PluginSettingTab {
-	plugin: ObsidianGitSync;
+	plugin: GitSync;
 
 	gitHubRepoText: TextComponent
 	gitHubPatText: TextComponent
@@ -468,7 +468,7 @@ class GitSyncSettingTab extends PluginSettingTab {
 	autoCommitToggleButton: ToggleComponent
 	intervalTimeText: TextComponent
 
-	constructor(app: App, plugin: ObsidianGitSync) {
+	constructor(app: App, plugin: GitSync) {
 		super(app, plugin);
 		this.plugin = plugin;
 	}
