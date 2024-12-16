@@ -13,6 +13,10 @@
 
 ---
 
+## Requirements
+
+---
+
 ## How to Install
 
 1. [Download the latest release](https://github.com/Stiff-Rock/ObsidianGitSync/releases/latest).
@@ -29,6 +33,10 @@
    - For HTTPS, use a Personal Access Token and ensure you enter your GitHub username.
    - For SSH, make sure SSH authentication is configured both in GitHub and on your computer.
 4. **Sync Your Vault**: Commit, push, pull, or enable auto-commit for automatic syncing.
+
+---
+
+## How it works
 
 ---
 
