@@ -16,7 +16,7 @@
 ## How to Install
 
 1. [Download the latest release](https://github.com/Stiff-Rock/ObsidianGitSync/releases/latest).
-2. Extract the files and move them to `.obsidian/plugins/ObsidianGitSync` in your vault.
+2. Extract the files into a folder and move it to `.obsidian/plugins/` in your vault.
 3. Enable the plugin in Obsidian: `Settings > Community Plugins`.
 
 ---
