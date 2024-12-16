@@ -796,7 +796,9 @@ class GitSyncSettingTab extends PluginSettingTab {
 	}
 }
 
-// Modal for Non-fast-forward conflicts
+//NOTE:maybe reuse the modal for other conflicts and just give it anotehr innterHTML through the constructor 
+
+// Modal class for Non-fast-forward conflicts
 class NonFastForwardModal extends Modal {
 	constructor(app: App, onSubmit: (result: boolean) => void) {
 		super(app);
