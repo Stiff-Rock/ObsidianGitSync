@@ -17,6 +17,10 @@ jobs:
         with:
           node-version: "18.x"
 
+      - name: Set tag version
+        id: vars
+        run: echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+
       - name: Build plugin
         run: |
           npm install
@@ -24,17 +28,15 @@ jobs:
 
       - name: Create release into zip archive
         run: |
-          zip -r "ObsidianGitSync-${tag}.zip" main.js manifest.json styles.css README.md LICENSE.txt
+          zip -r "ObsidianGitSync-${TAG}.zip" main.js manifest.json styles.css README.md LICENSE.txt
 
       - name: Create release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          tag="${GITHUB_REF#refs/tags/}"
-
-          # Upload the zip file to the release
-          gh release create "$tag" \
-            --title "$tag" \
+          gh release create "$TAG" \
+            --title "$TAG" \
             --draft \
-            "ObsidianGitSync-${tag}.zip"
+            "ObsidianGitSync-${TAG}.zip"
+
 
