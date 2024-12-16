@@ -37,6 +37,6 @@ jobs:
           gh release create "$TAG" \
             --title "$TAG" \
             --draft \
+            main.js manifest.json styles.css README.md LICENSE.txt \
             "GitSync-${TAG}.zip"
-
 

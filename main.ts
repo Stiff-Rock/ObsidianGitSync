@@ -110,6 +110,7 @@ class GitSettings {
 
 //NOTE: Switch to GitHub REST API so it works on mobile or just make a separate plugin
 //FIX: falta auto pull al abrir si esta configurado, arrelgar casos de conflcito un un pop up
+//TODO: check if git is installed
 
 export default class GitSync extends Plugin {
 	settings: GitSettings;
