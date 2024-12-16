@@ -6,8 +6,8 @@ import { NonFastForwardModal } from 'NonFastForwardModal';
 
 class GitSettings {
 	/*NOTE: Maybe add sepparate boolean values for the strings since you want to store 
-	* whatever the user types but that does not mean that the values are correct. 
-	* Notify of those missing configs through the status bar*/
+	* whatever the user types but that doesn't mean that the values are correct. 
+	* Notify of those missing config fields through the status bar*/
 
 	private _gitHubRepo: string = '';
 	private _gitHubUser: string = '';
