@@ -2,7 +2,7 @@ import { Plugin, PluginSettingTab, App, Setting, Notice, Tasks, TextComponent, B
 import simpleGit, { SimpleGit } from 'simple-git';
 import * as fs from 'fs';
 import * as path from 'path';
-import { NonFastForwardModal } from 'NonFastForwardModal';
+import { NonFastForwardModal } from './NonFastForwardModal';
 
 class GitSettings {
 	/*NOTE: Maybe add sepparate boolean values for the strings since you want to store 
