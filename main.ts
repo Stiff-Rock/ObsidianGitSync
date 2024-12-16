@@ -109,8 +109,6 @@ class GitSettings {
 }
 
 //NOTE: Switch to GitHub REST API so it works on mobile or just make a separate plugin
-//FIX: falta auto pull al abrir si esta configurado, arrelgar casos de conflcito un un pop up
-//TODO: check if git is installed
 
 export default class GitSync extends Plugin {
 	settings: GitSettings;
@@ -120,12 +118,16 @@ export default class GitSync extends Plugin {
 	statusBarText: HTMLSpanElement;
 
 	async onload() {
+		if (!await this.isGitInstalled())
+			return;
+
 		await this.loadSettings();
 
 		this.loadCommands();
 
 		// Check for local repos or newer versions and start the interval
 		this.app.workspace.onLayoutReady(async () => {
+
 			if (await this.git.checkIsRepo())
 				await this.fetchVault();
 
@@ -147,6 +149,18 @@ export default class GitSync extends Plugin {
 				await this.closeApp();
 			});
 		});
+	}
+
+	async isGitInstalled() {
+		try {
+			await this.git.raw('--version');
+			return true;
+		} catch (error) {
+			const message = 'Git is not installed or is not in the system PATH, disabling plugin...';
+			console.error(message);
+			new Notice(message, 6000);
+			return false;
+		}
 	}
 
 	async onunload() {
@@ -448,6 +462,9 @@ export default class GitSync extends Plugin {
 	}
 
 	async closeApp() {
+		if (!await this.isGitInstalled())
+			return;
+
 		await this.saveSettings();
 		await this.stopGitInterval();
 		await this.pushVault();
@@ -797,7 +814,7 @@ class GitSyncSettingTab extends PluginSettingTab {
 	}
 }
 
-//NOTE:maybe reuse the modal for other conflicts and just give it anotehr innterHTML through the constructor 
+//NOTE: Maybe reuse the modal for other conflicts and just give it anotehr innterHTML through the constructor 
 
 // Modal class for Non-fast-forward conflicts
 class NonFastForwardModal extends Modal {
