@@ -1,13 +1,17 @@
-import { Plugin, PluginSettingTab, App, Setting, Notice, Tasks, TextComponent, ButtonComponent, ToggleComponent, Modal } from 'obsidian';
+import { Plugin, PluginSettingTab, App, Setting, Notice, Tasks, TextComponent, ButtonComponent, ToggleComponent } from 'obsidian';
 import { Octokit } from "@octokit/rest";
+import * as fs from 'fs/promises';
+import * as path from 'path';
 
 class GitSettings {
 	//TODO: MAYBE IS USEFUL TO SAVE SOME USER INFO LIKE THE USERNAME OR THE CREATED REPO NAME 
 
-	private _gitHubRepo: string = '';
 	private _gitHubRepoName: string = '';
+
 	private _gitHubPat: string = '';
 	private _gitHubUsername: string = '';
+
+	private _userEmail: string = '';
 
 	private _isConfigured: boolean = false;
 
@@ -22,28 +26,12 @@ class GitSettings {
 	}
 
 	// Checks the conditions that are required for the plugin to be considered as configured
+	//TODO: comprobar de alguna manera que va
 	private checkAllSet(): void {
-		if (this._gitHubRepo && this._gitHubPat && this.isUsingHTTPS())
-			//TODO: comprobar de alguna manera que va
+		if (this._gitHubPat && this._userEmail && this.gitHubRepoName)
 			this._isConfigured = true;
 		else
 			this._isConfigured = false;
-	}
-
-	// Checks if the gitHubRepo has HTTP format
-	public isUsingHTTPS(): boolean {
-		let httpsUrl = /^https:\/\/github\.com\/[\w-]+\/[\w-]+(?:\.git)?$/;
-		return httpsUrl.test(this._gitHubRepo);
-	}
-
-	// gitHubRepo getters and setters
-	get gitHubRepo(): string {
-		return this._gitHubRepo;
-	}
-
-	set gitHubRepo(value: string) {
-		this._gitHubRepo = value;
-		this.checkAllSet();
 	}
 
 	// gitHubRepoName getters and setters
@@ -73,6 +61,16 @@ class GitSettings {
 
 	set gitHubUsername(value: string) {
 		this._gitHubUsername = value;
+		this.checkAllSet();
+	}
+
+	// gitHubRepoName getters and setters
+	get userEmail(): string {
+		return this._userEmail;
+	}
+
+	set userEmail(value: string) {
+		this._userEmail = value;
 		this.checkAllSet();
 	}
 
@@ -137,7 +135,7 @@ export default class GitSync extends Plugin {
 	}
 
 	async onunload() {
-		await this.closeApp();
+		//await this.closeApp();
 	}
 
 	async loadSettings() {
@@ -163,7 +161,7 @@ export default class GitSync extends Plugin {
 		console.log('Git timer started')
 		this.gitIntervalId = setInterval(async () => {
 			if (this.settings.doAutoCommit)
-				await this.addAndCommitVault();
+				await this.pushVault();
 		}, this.settings.intervalTime);
 	}
 
@@ -175,7 +173,7 @@ export default class GitSync extends Plugin {
 	}
 
 	async authUser() {
-		if (this.settings.isConfigured) {
+		if (this.settings.gitHubPat) {
 			try {
 				this.octokit = new Octokit({ auth: this.settings.gitHubPat });
 
@@ -195,24 +193,35 @@ export default class GitSync extends Plugin {
 	}
 
 	//TODO: Use modals to prompt some settings?
-	async createRepo() {
+	//TODO: Creation reponses
+	async createRepo(): Promise<boolean> {
 		try {
-			this.settings.gitHubRepoName = this.settings.gitHubUsername + '-ObsidianVault-' + this.app.vault.getName();
+			const repoName = this.settings.gitHubUsername + '-ObsidianVault-' + this.app.vault.getName();
 
 			console.log('Chosen name', this.settings.gitHubRepoName)
 
 			const response = await this.octokit.repos.createForAuthenticatedUser({
-				name: this.settings.gitHubRepoName,
+				name: repoName,
 				private: true,
 			});
 			console.log('Create action response:', response);
+
+			this.settings.gitHubRepoName = repoName;
+
+
+			new Notice('Succesfully created repository with name' + repoName, 4000);
+
+			return true;
 		} catch (error) {
 			console.error('Error creating repository', error);
+			new Notice('Error creating repository', 4000);
+
+			return false;
 		}
 	}
 
-	//TODO: Handle error such as 404
-	async deleteRepo() {
+	//TODO: Handle error such as 404 or normal responses
+	async deleteRepo(): Promise<boolean> {
 		try {
 			console.log('Deleting: ' + this.settings.gitHubUsername + ' and ' + this.settings.gitHubRepoName)
 
@@ -220,14 +229,43 @@ export default class GitSync extends Plugin {
 				owner: this.settings.gitHubUsername,
 				repo: this.settings.gitHubRepoName
 			});
+
 			console.log('Delete action response:', response);
+			this.settings.gitHubRepoName = '';
+
+			new Notice('Succesfully deleted repository', 4000);
+
+			return true;
 		} catch (error) {
 			console.error('Error deleting repository', error);
+			new Notice('Error deleting repository', 4000);
+
+			return false;
 		}
 	}
 
-	async addAndCommitVault() {
-		//TODO: ADD AND COMMIT
+	// Helper function to load in an array all the vault's files
+	async getFiles(dir: string): Promise<string[]> {
+		const files: string[] = [];
+		const entries = await fs.readdir(dir, { withFileTypes: true });
+
+		for (const entry of entries) {
+			if (entry.name.startsWith('.')) {
+				continue;
+			}
+
+			const fullPath = path.join(dir, entry.name);
+			if (entry.isDirectory()) {
+				files.push(...(await this.getFiles(fullPath)));
+			} else {
+				files.push(fullPath);
+			}
+		}
+
+		return files;
+	}
+
+	async pushVault() {
 		if (this.settings.isConfigured) {
 			let message = "Error adding and committing changes";
 			try {
@@ -242,43 +280,60 @@ export default class GitSync extends Plugin {
 					second: '2-digit'
 				});
 
+				const commitMessage = `Git Sync: Saved at ${formattedDate}`;
+
+				const files = await this.getFiles((this.app.vault.adapter as any).basePath);
+
+				for (const file of files) {
+					const relativePath = path.relative((this.app.vault.adapter as any).basePath, file);
+					const fileContent = await fs.readFile(file);
+					const base64Content = fileContent.toString('base64');
+
+					let existingSha = null;
+					try {
+						const existingFileResponse = await this.octokit.repos.getContent({
+							owner: this.settings.gitHubUsername,
+							repo: this.settings.gitHubRepoName,
+							path: relativePath
+						});
+
+						(existingSha = existingFileResponse.data as any).sha;
+					} catch (error) {
+						console.log(`File ${relativePath} might not exist on GitHub`);
+					}
+
+					try {
+						await this.octokit.repos.createOrUpdateFileContents({
+							owner: this.settings.gitHubUsername,
+							repo: this.settings.gitHubRepoName,
+							path: relativePath,
+							message: commitMessage,
+							content: base64Content,
+							committer: {
+								name: this.settings.gitHubUsername,
+								email: this.settings.userEmail
+							},
+							author: {
+								name: this.settings.gitHubUsername,
+								email: this.settings.userEmail
+							},
+							sha: existingSha
+						});
+						console.log(`Pushed ${relativePath}`);
+					} catch (error) {
+						console.error(`Error pushing ${relativePath}:`, error);
+					}
+				}
+
 				message = 'Changes commited'
-				this.statusBarText.textContent = `Git Sync: Saved at ${formattedDate}`;
+				this.statusBarText.textContent = commitMessage;
 			} catch (error) {
 				console.error(message + ": ", error);
 			} finally {
 				new Notice(message, 3000);
 			}
 		} else {
-			console.log('No repo in this vault');
-		}
-	}
-
-	async pushVault() {
-		//TODO: PUSH
-		if (!this.settings.isConfigured)
-			return;
-
-		let message = 'Error pushing changes to repository'
-		try {
-			await this.addAndCommitVault();
-			message = 'Pushed changes';
-			console.log(message)
-		} catch (error) {
-			//WARNING: Cuidado con las ramas
-			if (error.message.includes('--set-upstream')) {
-				message = 'Upstream branch set to master and pushed changes';
-				console.log(message);
-			}
-			//TODO: SOMEHOW HANDLE CONFLICTS
-			else if (error.message.includes('non-fast-forward')) {
-				await this.openNonFastFowardModal();
-			} else if (error.message.includes('[rejected] (fetch first)')) {
-			} else {
-				console.log(message + ": ", error);
-			}
-		} finally {
-			new Notice(message, 4000);
+			console.log('Plugin not configured');
 		}
 	}
 
@@ -294,42 +349,8 @@ export default class GitSync extends Plugin {
 		}
 	}
 
-	async openNonFastFowardModal(): Promise<string> {
-		const accept = await new Promise<boolean>((resolve) => {
-			new NonFastForwardModal(this.app, resolve).open();
-		});
-
-		if (accept)
-			return await this.pullRebase();
-		else
-			return "Error pulling from remote";
-	}
-
-	async pullRebase(): Promise<string> {
-		try {
-			console.log('Non-fast-forward error detected, pulling changes...');
-
-			console.log('Successfully pulled changes');
-
-			await this.pushVault();
-			console.log('Pushed changes after pulling remote updates');
-			return 'Pushed changes after pulling remote updates'
-		} catch (pullError) {
-			console.log('Error during pull or push: ' + pullError.message);
-			return "Error pulling from remote";
-		}
-	}
-
 	// adds the commads to init, delete, commit, push, fetch, and toggle the interval
 	async loadCommands() {
-		// Command to commit changes to the Git repository
-		this.addCommand({
-			id: 'commit-changes',
-			name: 'Commit Changes',
-			callback: async () => {
-				await this.addAndCommitVault();
-			},
-		});
 
 		// Command to push changes to the Git repository
 		this.addCommand({
@@ -367,6 +388,22 @@ export default class GitSync extends Plugin {
 		});
 	}
 
+	async checkRepositoryExists(): Promise<boolean> {
+		try {
+			await this.octokit.repos.get({
+				owner: this.settings.gitHubUsername,
+				repo: this.settings.gitHubRepoName,
+			});
+			return true;
+		} catch (error) {
+			if (error.status === 404) {
+				return false;
+			} else {
+				throw error;
+			}
+		}
+	}
+
 	//TODO: CAMBIAR ESTO
 	async closeApp() {
 		if (!this.settings.isConfigured)
@@ -381,8 +418,9 @@ export default class GitSync extends Plugin {
 class GitSyncSettingTab extends PluginSettingTab {
 	plugin: GitSync;
 
-	gitHubRepoText: TextComponent
+	userEmailText: TextComponent
 	gitHubPatText: TextComponent
+	gitHubRepoText: TextComponent
 
 	createRepoButton: ButtonComponent
 	deleteRepoButton: ButtonComponent
@@ -403,23 +441,20 @@ class GitSyncSettingTab extends PluginSettingTab {
 
 		containerEl.empty();
 
-		// Repository Remote Url
-		new Setting(containerEl) //TODO: Add a toggle 'custom url' or somthing
-			.setName('GitHub Repository Url')
-			.setDesc('Only fill this field with an HTTP url if you are using a manually created repository or if you are migrating to another')
-			.addText(text => {
-				this.gitHubRepoText = text;
-				text.setPlaceholder('Repository Url')
-				text.setValue(this.plugin.settings.gitHubRepo);
-				text.inputEl.classList.add('git-sync-config-field');
-				text.inputEl.onblur = async (event: FocusEvent) => {
-					this.plugin.settings.gitHubRepo = (event.target as HTMLInputElement).value;
+		// User's github account email
+		new Setting(containerEl)
+			.setName('Email')
+			.addText((text) => {
+				this.gitHubPatText = text;
+				text.setPlaceholder('Github account email')
+				text.setValue(this.plugin.settings.userEmail)
+				text.onChange(async value => {
+					this.plugin.settings.userEmail = value;
+					await this.plugin.saveSettings();
 
-					if (!this.plugin.settings.isUsingHTTPS()) {
-						new Notice('Invalid repository url, ensure it is a valid GitHub HTTP url', 4000);
-						return;
-					}
-				};
+					this.reloadFields();
+				})
+				text.inputEl.classList.add('git-sync-config-field');
 			});
 
 		// GitHub Personal Acces Token
@@ -431,14 +466,44 @@ class GitSyncSettingTab extends PluginSettingTab {
 				text.setValue(this.plugin.settings.gitHubPat)
 				text.onChange(async value => {
 					this.plugin.settings.gitHubPat = value;
-					//TODO: notify the suer that the auth works
+					//TODO: notify the user that the auth works
 
 					this.plugin.authUser();
 
 					await this.plugin.saveSettings();
+
+					this.reloadFields();
 				})
 				text.inputEl.classList.add('git-sync-config-field');
 				text.inputEl.setAttribute("type", "password");
+			});
+
+		// Repository name 
+		new Setting(containerEl) //TODO: Add a toggle 'custom url' or somthing
+			.setName('GitHub Repository Name')
+			.setDesc('Only fill this field with the name of the repository if you are using a manually created repository or if you are migrating to another')
+			.addText(text => {
+				this.gitHubRepoText = text;
+				text.setPlaceholder('Repository name')
+				text.setValue(this.plugin.settings.gitHubRepoName);
+				text.inputEl.classList.add('git-sync-config-field');
+				text.inputEl.onblur = async (event: FocusEvent) => {
+					const value = (event.target as HTMLInputElement).value.trim();
+					this.plugin.settings.gitHubRepoName = value;
+
+					await this.plugin.saveSettings();
+
+					if (value) {
+						if (!await this.plugin.checkRepositoryExists()) {
+							new Notice('This repository does not exist or could not be found', 4000);
+							this.plugin.settings.gitHubRepoName = '';
+						} else {
+							new Notice('Repository aviable', 4000);
+						}
+					}
+
+					this.reloadFields();
+				};
 			});
 
 		// Create repository button
@@ -451,9 +516,15 @@ class GitSyncSettingTab extends PluginSettingTab {
 				button.buttonEl.classList.add('git-sync-config-field')
 				button.onClick(async _ => {
 					await this.disableAllFields();
-					this.plugin.createRepo();
+					await this.plugin.createRepo();
 					await this.enableAllFields()
+					this.gitHubRepoText.setValue(this.plugin.settings.gitHubRepoName);
+
+					this.reloadFields();
 				})
+
+				if (this.plugin.settings.isConfigured)
+					button.buttonEl.disabled = true;
 			})
 
 		// Toggle commit interval
@@ -500,7 +571,6 @@ class GitSyncSettingTab extends PluginSettingTab {
 					this.plugin.statusBarText.textContent = 'Git Sync: ' + status;
 				})
 
-				//TODO: COMPROBAR QUE ESTE CONFIGURADO
 				if (!this.plugin.settings.isConfigured) {
 					toggle.disabled = true;
 					this.intervalTimeText.inputEl.disabled = true;
@@ -565,16 +635,15 @@ class GitSyncSettingTab extends PluginSettingTab {
 				button.setButtonText('Delete')
 				button.buttonEl.id = 'delete-btn';
 				button.onClick(async _ => {
-					//TODO: USE DISABLE ADN ENBLE ALL FIELDS
-					//
 					await this.disableAllFields();
 					await this.plugin.deleteRepo();
 					await this.enableAllFields();
+
+					this.reloadFields();
 				})
 
 				if (!this.plugin.settings.isConfigured)
 					button.buttonEl.disabled = true;
-
 			})
 	}
 
@@ -613,38 +682,22 @@ class GitSyncSettingTab extends PluginSettingTab {
 
 		document.body.style.cursor = "default";
 	}
-}
 
-//NOTE: Maybe reuse the modal for other conflicts and just give it anotehr innterHTML through the constructor 
-
-// Modal class for Non-fast-forward conflicts
-class NonFastForwardModal extends Modal {
-	constructor(app: App, onSubmit: (result: boolean) => void) {
-		super(app);
-		this.setTitle('A conflict has ocurred');
-		this.contentEl.innerHTML = `
-			<p>Your vault has changes that are not in sync with the uploaded version.</p>
-			<ul>
-				<li>Press "Confirm" to pull the latest changes and apply your updates on top. The remote changes won’t be visible directly, and you may need to manually add them to your vault.</li>
-				<li>Press "Cancel", no changes will be pushed, and you’ll need to resolve the conflict manually (this is not recommended unless you are familiar with Git).</li>
-			</ul>
-		`;
-
-		new Setting(this.contentEl)
-			.addButton(button => {
-				button.setButtonText('Accept')
-					.onClick(() => {
-						this.close();
-						onSubmit(true);
-					});
-
-			})
-			.addButton(button => {
-				button.setButtonText('Cancel')
-					.onClick(() => {
-						this.close();
-						onSubmit(false);
-					});
-			});
+	reloadFields() {
+		if (this.plugin.settings.isConfigured) {
+			this.createRepoButton.buttonEl.disabled = true;
+			this.deleteRepoButton.buttonEl.disabled = false;
+			this.pushButton.buttonEl.disabled = false;
+			this.fetchButton.buttonEl.disabled = false;
+			this.autoCommitToggleButton.disabled = false;
+			this.intervalTimeText.inputEl.disabled = false;
+		} else {
+			this.createRepoButton.buttonEl.disabled = false;
+			this.deleteRepoButton.buttonEl.disabled = true;
+			this.pushButton.buttonEl.disabled = true;
+			this.fetchButton.buttonEl.disabled = true;
+			this.autoCommitToggleButton.disabled = true;
+			this.intervalTimeText.inputEl.disabled = true;
+		}
 	}
 }
