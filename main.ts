@@ -198,8 +198,6 @@ export default class GitSync extends Plugin {
 		try {
 			const repoName = this.settings.gitHubUsername + '-ObsidianVault-' + this.app.vault.getName();
 
-			console.log('Chosen name', this.settings.gitHubRepoName)
-
 			const response = await this.octokit.repos.createForAuthenticatedUser({
 				name: repoName,
 				private: true,
@@ -265,31 +263,54 @@ export default class GitSync extends Plugin {
 		return files;
 	}
 
+	// Pushses files into the repository
 	async pushVault() {
 		if (this.settings.isConfigured) {
-			let message = "Error adding and committing changes";
 			try {
-
-				const now = new Date();
-				const formattedDate = now.toLocaleString('en-US', {
-					year: 'numeric',
-					month: '2-digit',
-					day: '2-digit',
-					hour: '2-digit',
-					minute: '2-digit',
-					second: '2-digit'
-				});
-
-				const commitMessage = `Git Sync: Saved at ${formattedDate}`;
+				const message = 'Vault saved at ' + this.getCurrentDate();
 
 				const files = await this.getFiles((this.app.vault.adapter as any).basePath);
 
+				const localPaths = new Set(
+					files.map(file =>
+						path.relative((this.app.vault.adapter as any).basePath, file).split(path.sep).join('/')
+					)
+				);
+				const repoFiles: { path: string, sha: string }[] | undefined = await this.fetchVault();
+				let filesToDelete = null;
+				if (repoFiles)
+					filesToDelete = repoFiles.filter(file => !localPaths.has(file.path));
+
+				// Handle file deletion
+				if (filesToDelete) {
+					for (const file of filesToDelete) {
+						try {
+							console.log(`Deleting ${file.path} from repository`);
+							await this.octokit.repos.deleteFile({
+								owner: this.settings.gitHubUsername,
+								repo: this.settings.gitHubRepoName,
+								path: file.path,
+								message: `Deleted file ${file.path}`,
+								sha: file.sha,
+								committer: {
+									name: this.settings.gitHubUsername,
+									email: this.settings.userEmail
+								}
+							});
+						} catch (error) {
+							console.error(`Failed to delete ${file.path}:`, error);
+						}
+					}
+				}
+
+				// Handle file creation or updating
 				for (const file of files) {
-					const relativePath = path.relative((this.app.vault.adapter as any).basePath, file);
+					const relativePath = path.relative((this.app.vault.adapter as any).basePath, file).split(path.sep).join('/');
+
 					const fileContent = await fs.readFile(file);
 					const base64Content = fileContent.toString('base64');
 
-					let existingSha = null;
+					let existingSha: string = '';
 					try {
 						const existingFileResponse = await this.octokit.repos.getContent({
 							owner: this.settings.gitHubUsername,
@@ -297,55 +318,91 @@ export default class GitSync extends Plugin {
 							path: relativePath
 						});
 
-						(existingSha = existingFileResponse.data as any).sha;
+						existingSha = (existingFileResponse.data as any).sha;
 					} catch (error) {
-						console.log(`File ${relativePath} might not exist on GitHub`);
+						if (error.message.includes('404')) {
+							console.log('File not present in repository');
+						} else {
+							console.error(`Error checking ${relativePath}:`, error);
+							throw error;
+						}
 					}
 
-					try {
-						await this.octokit.repos.createOrUpdateFileContents({
-							owner: this.settings.gitHubUsername,
-							repo: this.settings.gitHubRepoName,
-							path: relativePath,
-							message: commitMessage,
-							content: base64Content,
-							committer: {
-								name: this.settings.gitHubUsername,
-								email: this.settings.userEmail
-							},
-							author: {
-								name: this.settings.gitHubUsername,
-								email: this.settings.userEmail
-							},
-							sha: existingSha
-						});
-						console.log(`Pushed ${relativePath}`);
-					} catch (error) {
-						console.error(`Error pushing ${relativePath}:`, error);
-					}
+					await this.octokit.repos.createOrUpdateFileContents({
+						owner: this.settings.gitHubUsername,
+						repo: this.settings.gitHubRepoName,
+						path: relativePath,
+						message: message,
+						content: base64Content,
+						committer: {
+							name: this.settings.gitHubUsername,
+							email: this.settings.userEmail
+						},
+						sha: existingSha
+					});
+
+					this.statusBarText.textContent = message;
 				}
-
-				message = 'Changes commited'
-				this.statusBarText.textContent = commitMessage;
 			} catch (error) {
-				console.error(message + ": ", error);
-			} finally {
-				new Notice(message, 3000);
+				console.error(error)
+				new Notice('Error pushing vault', 4000);
 			}
 		} else {
-			console.log('Plugin not configured');
+			new Notice('Plugin not configured', 4000);
 		}
 	}
 
 	async fetchVault() {
-		//TODO: FETCH CHANGES
-		let message = "Error pulling from remote"
-		try {
-		} catch (error) {
-			message = "Error fetching from remote"
-			console.error(message + ": ", error);
-		} finally {
-			new Notice(message, 4000);
+		if (this.settings.isConfigured) {
+			try {
+				const files: { path: string, sha: string }[] = [];
+
+				const response = await this.octokit.repos.getContent({
+					owner: this.settings.gitHubUsername,
+					repo: this.settings.gitHubRepoName,
+					path: ''
+				});
+
+				if (Array.isArray(response.data)) {
+					await this.processDirectories(response.data, files)
+				} else {
+					console.error('Error fetching data: ' + response)
+					return;
+				}
+
+				return files;
+			} catch (error) {
+				new Notice(error, 4000);
+			}
+		} else {
+			new Notice('Plugin not configured', 4000);
+		}
+	}
+
+	async processDirectories(items: any, files: { path: string, sha: string }[]) {
+		for (const item of items) {
+			if (item.type === 'dir') {
+				const dirResponse = await this.octokit.repos.getContent({
+					owner: this.settings.gitHubUsername,
+					repo: this.settings.gitHubRepoName,
+					path: item.path
+				});
+				await this.processDirectories(dirResponse.data, files)
+			} else if (item.type === 'file') {
+				files.push({ path: item.path, sha: item.sha });
+			}
+		}
+	}
+
+	async pullVault() {
+		if (this.settings.isConfigured) {
+			try {
+
+			} catch (error) {
+				new Notice(error, 4000);
+			}
+		} else {
+			new Notice('Plugin not configured', 4000);
 		}
 	}
 
@@ -366,7 +423,7 @@ export default class GitSync extends Plugin {
 			id: 'fetch-changes',
 			name: 'Fetch Changes',
 			callback: async () => {
-				await this.fetchVault();
+				await this.pullVault();
 			},
 		});
 
@@ -385,6 +442,15 @@ export default class GitSync extends Plugin {
 					console.log('Git Sync interval started.');
 				}
 			},
+		});
+	}
+
+	getCurrentDate(): string {
+		const now = new Date();
+		return now.toLocaleString('en-US', {
+			hour: '2-digit',
+			minute: '2-digit',
+			second: '2-digit'
 		});
 	}
 
@@ -577,19 +643,19 @@ class GitSyncSettingTab extends PluginSettingTab {
 				}
 			});
 
-		// Fetch button
+		// Pull button
 		new Setting(containerEl)
-			.setName('Fetch Vault')
+			.setName('Pull Vault')
 			.setDesc('Checks for a new version of the vault and donwloads it')
 			.addButton(async button => {
 				this.fetchButton = button;
-				button.setButtonText('Fetch')
+				button.setButtonText('Pull')
 				button.buttonEl.classList.add('git-sync-config-field')
 				button.onClick(async _ => {
 					await this.disableAllFields();
 
 					if (this.plugin.settings.isConfigured) {
-						await this.plugin.fetchVault()
+						await this.plugin.pullVault()
 					} else {
 						console.log(this.plugin.settings)
 						new Notice('Your remote isn\'t fully configured', 4000);
@@ -636,8 +702,12 @@ class GitSyncSettingTab extends PluginSettingTab {
 				button.buttonEl.id = 'delete-btn';
 				button.onClick(async _ => {
 					await this.disableAllFields();
-					await this.plugin.deleteRepo();
+					const response = await this.plugin.deleteRepo();
 					await this.enableAllFields();
+
+					if (response)
+						this.gitHubRepoText.setValue('')
+
 
 					this.reloadFields();
 				})
