@@ -1,4 +1,4 @@
-import { Plugin, PluginSettingTab, App, Setting, Notice, Tasks, TextComponent, ButtonComponent, ToggleComponent } from 'obsidian';
+import { Plugin, PluginSettingTab, App, Setting, Notice, Tasks, TextComponent, ButtonComponent, ToggleComponent, TFile, TFolder } from 'obsidian';
 import { Octokit } from "@octokit/rest";
 import * as fs from 'fs/promises';
 import * as path from 'path';
@@ -113,7 +113,6 @@ export default class GitSync extends Plugin {
 
 		// Check for local repos or newer versions and start the interval
 		this.app.workspace.onLayoutReady(async () => {
-
 			//TODO: comprobar cambios antes de iniciar y pullearlos	
 
 			this.startGitInterval()
@@ -129,7 +128,7 @@ export default class GitSync extends Plugin {
 		// Stop interval and commit changes right before closing the app
 		this.app.workspace.on('quit', (tasks: Tasks) => {
 			tasks.add(async () => {
-				await this.closeApp();
+				//await this.closeApp();
 			});
 		});
 	}
@@ -335,7 +334,7 @@ export default class GitSync extends Plugin {
 					await this.octokit.repos.createOrUpdateFileContents({
 						owner: this.settings.gitHubUsername,
 						repo: this.settings.gitHubRepoName,
-						path: file.path,
+						path: file.path.replace('\\', '/'),
 						message: message,
 						content: base64Content,
 						committer: {
@@ -356,7 +355,6 @@ export default class GitSync extends Plugin {
 		}
 	}
 
-	//FIX: Folders are not beign deleted
 	async fetchVault() {
 		if (this.settings.isConfigured) {
 			try {
@@ -438,12 +436,59 @@ export default class GitSync extends Plugin {
 				} else {
 					console.log('No files to delete')
 				}
+
+				// Handle file download
+				await this.downloadRepoFiles()
+				this.statusBarText.textContent = 'Git Sync: Vault Updated';
 			} catch (error) {
 				console.error(error)
 				new Notice('Error pulling from repository', 4000);
 			}
 		} else {
 			new Notice('Plugin not configured', 4000);
+		}
+	}
+
+	async downloadRepoFiles(searchPath: string = '') {
+		const getContentResponse = await this.octokit.repos.getContent({
+			owner: this.settings.gitHubUsername,
+			repo: this.settings.gitHubRepoName,
+			path: searchPath
+		});
+
+		console.log('DATA:', getContentResponse.data)
+
+		for (const file of getContentResponse.data as any) {
+			const filePath = file.path;
+			const vaultPath = filePath.replace(/\\/g, '/');
+
+			if (file.type === 'file') {
+				const existingFile = this.app.vault.getAbstractFileByPath(vaultPath);
+				const fileContentResponse = await this.octokit.rest.repos.getContent({
+					owner: this.settings.gitHubUsername,
+					repo: this.settings.gitHubRepoName,
+					path: filePath,
+				});
+				const fileContent = Buffer.from((fileContentResponse.data as any).content, 'base64').toString('utf-8');
+
+				if (existingFile && existingFile instanceof TFile) {
+					await this.app.vault.modify(existingFile, fileContent);
+					console.log(`Updated file: ${vaultPath}`);
+				} else {
+					await this.app.vault.create(vaultPath, fileContent);
+					console.log(`Created file: ${vaultPath}`);
+				}
+			} else if (file.type === 'dir') {
+				const folderExists = this.app.vault.getAbstractFileByPath(vaultPath);
+
+				if (!folderExists) {
+					await this.app.vault.createFolder(vaultPath);
+					console.log(`Created folder: ${vaultPath}`);
+				} else {
+					console.log(`Folder already exists: ${vaultPath}`);
+				}
+				await this.downloadRepoFiles(vaultPath);
+			}
 		}
 	}
 
@@ -513,12 +558,12 @@ export default class GitSync extends Plugin {
 
 	//TODO: CAMBIAR ESTO
 	async closeApp() {
-		if (!this.settings.isConfigured)
+		/*if (!this.settings.isConfigured)
 			return;
 
 		await this.saveSettings();
 		await this.stopGitInterval();
-		await this.pushVault();
+		await this.pushVault();*/
 	}
 }
 
