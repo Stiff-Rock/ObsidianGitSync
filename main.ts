@@ -449,6 +449,7 @@ export default class GitSync extends Plugin {
 		}
 	}
 
+	// Helper function that fetches and donwloads the repository files and folders
 	async downloadRepoFiles(searchPath: string = '') {
 		const getContentResponse = await this.octokit.repos.getContent({
 			owner: this.settings.gitHubUsername,
