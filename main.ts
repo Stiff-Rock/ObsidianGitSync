@@ -4,8 +4,6 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 
 class GitSettings {
-	//TODO: MAYBE IS USEFUL TO SAVE SOME USER INFO LIKE THE USERNAME OR THE CREATED REPO NAME 
-
 	private _gitHubRepoName: string = '';
 
 	private _gitHubPat: string = '';
@@ -26,7 +24,6 @@ class GitSettings {
 	}
 
 	// Checks the conditions that are required for the plugin to be considered as configured
-	//TODO: comprobar de alguna manera que va
 	private checkAllSet(): void {
 		if (this._gitHubPat && this._userEmail && this.gitHubRepoName)
 			this._isConfigured = true;
@@ -113,7 +110,7 @@ export default class GitSync extends Plugin {
 
 		// Check for local repos or newer versions and start the interval
 		this.app.workspace.onLayoutReady(async () => {
-			//TODO: comprobar cambios antes de iniciar y pullearlos	
+			//TODO: Comprobar cambios antes de iniciar y pullearlos	
 
 			this.startGitInterval()
 
@@ -125,20 +122,18 @@ export default class GitSync extends Plugin {
 				this.statusBarText.textContent = 'Git Sync: Needs configuration';
 		});
 
-		// Stop interval and commit changes right before closing the app
 		this.app.workspace.on('quit', (tasks: Tasks) => {
 			tasks.add(async () => {
-				//await this.closeApp();
+				await this.closeApp();
 			});
 		});
 	}
 
 	async onunload() {
-		//await this.closeApp();
+		await this.closeApp();
 	}
 
 	async loadSettings() {
-		//TODO: GESTIONAR ESTO Y LA CREACION DE LA INSTANCIA DE OCKTOKIT
 		let loadedSettings = await this.loadData();
 
 		if (!loadedSettings) {
@@ -182,8 +177,10 @@ export default class GitSync extends Plugin {
 					this.settings.gitHubUsername = user.login;
 
 				console.log('Logged as', this.settings.gitHubUsername);
+				new Notice('User authenticated succesfully', 4000);
 			} catch (error) {
 				console.error('Error authenticating user:', error)
+				new Notice('User could not be authenticated', 4000);
 			}
 		} else {
 			console.error('Not configured')
@@ -191,8 +188,6 @@ export default class GitSync extends Plugin {
 		}
 	}
 
-	//TODO: Use modals to prompt some settings?
-	//TODO: Creation reponses
 	async createRepo(): Promise<boolean> {
 		try {
 			const repoName = this.settings.gitHubUsername + '-ObsidianVault-' + this.app.vault.getName();
@@ -217,7 +212,6 @@ export default class GitSync extends Plugin {
 		}
 	}
 
-	//TODO: Handle error such as 404 or normal responses
 	async deleteRepo(): Promise<boolean> {
 		try {
 			console.log('Deleting: ' + this.settings.gitHubUsername + ' and ' + this.settings.gitHubRepoName)
@@ -242,7 +236,7 @@ export default class GitSync extends Plugin {
 	}
 
 	// Helper function to load in an array all the vault's files
-	// TODO: Maybe get the sha to compare with repo files
+	// WARNING: Implement sha to comparing with repo files
 	async getFiles(dir: string): Promise<{ path: string, type: string, sha: string }[]> {
 		const files: { path: string, type: string, sha: string }[] = [];
 		const entries = await fs.readdir(dir, { withFileTypes: true });
@@ -285,6 +279,11 @@ export default class GitSync extends Plugin {
 				// Handle file deletion
 				if (filesToDelete) {
 					for (const file of filesToDelete) {
+						if (file.type === 'dir')
+							continue;
+
+						console.log('PATH DELETION: ' + file.path)
+
 						try {
 							console.log(`Deleting ${file.path} from repository`);
 							await this.octokit.repos.deleteFile({
@@ -315,6 +314,7 @@ export default class GitSync extends Plugin {
 					// Check if file exists to update it
 					let existingSha: string = '';
 					try {
+						//FIX: this shows error in the console when not finding something despite handling it prefectly
 						const existingFileResponse = await this.octokit.repos.getContent({
 							owner: this.settings.gitHubUsername,
 							repo: this.settings.gitHubRepoName,
@@ -334,7 +334,7 @@ export default class GitSync extends Plugin {
 					await this.octokit.repos.createOrUpdateFileContents({
 						owner: this.settings.gitHubUsername,
 						repo: this.settings.gitHubRepoName,
-						path: file.path.replace('\\', '/'),
+						path: file.path.replace(/\\/g, '/'),
 						message: message,
 						content: base64Content,
 						committer: {
@@ -398,7 +398,7 @@ export default class GitSync extends Plugin {
 		}
 	}
 
-	//TODO: For now it gives priority to the repo's content
+	//NOTE: For now it gives priority to the repo's content
 	async pullVault() {
 		if (this.settings.isConfigured) {
 			try {
@@ -556,14 +556,13 @@ export default class GitSync extends Plugin {
 		}
 	}
 
-	//TODO: CAMBIAR ESTO
 	async closeApp() {
-		/*if (!this.settings.isConfigured)
+		if (!this.settings.isConfigured)
 			return;
-
-		await this.saveSettings();
+		
 		await this.stopGitInterval();
-		await this.pushVault();*/
+		await this.saveSettings();
+		await this.pushVault();
 	}
 }
 
@@ -587,7 +586,6 @@ class GitSyncSettingTab extends PluginSettingTab {
 		this.plugin = plugin;
 	}
 
-	//TODO: Be more specfic about what 'not configured' means
 	display(): void {
 		const { containerEl } = this;
 
@@ -618,12 +616,8 @@ class GitSyncSettingTab extends PluginSettingTab {
 				text.setValue(this.plugin.settings.gitHubPat)
 				text.onChange(async value => {
 					this.plugin.settings.gitHubPat = value;
-					//TODO: notify the user that the auth works
-
 					this.plugin.authUser();
-
 					await this.plugin.saveSettings();
-
 					this.reloadFields();
 				})
 				text.inputEl.classList.add('git-sync-config-field');
@@ -631,7 +625,7 @@ class GitSyncSettingTab extends PluginSettingTab {
 			});
 
 		// Repository name 
-		new Setting(containerEl) //TODO: Add a toggle 'custom url' or somthing
+		new Setting(containerEl)
 			.setName('GitHub Repository Name')
 			.setDesc('Only fill this field with the name of the repository if you are using a manually created repository or if you are migrating to another')
 			.addText(text => {
@@ -765,7 +759,6 @@ class GitSyncSettingTab extends PluginSettingTab {
 				button.buttonEl.classList.add('git-sync-config-field')
 				button.onClick(async _ => {
 					await this.disableAllFields();
-					//TODO: CONSIDER ALWAYS REBASING SO NO CONFLICTS CAN OCUR
 					if (this.plugin.settings.isConfigured) {
 						await this.plugin.pushVault()
 					} else {
