@@ -243,20 +243,21 @@ export default class GitSync extends Plugin {
 	}
 
 	// Helper function to load in an array all the vault's files
-	async getFiles(dir: string): Promise<string[]> {
-		const files: string[] = [];
+	// TODO: Maybe get the sha to compare with repo files
+	async getFiles(dir: string): Promise<{ path: string, type: string, sha: string }[]> {
+		const files: { path: string, type: string, sha: string }[] = [];
 		const entries = await fs.readdir(dir, { withFileTypes: true });
 
 		for (const entry of entries) {
-			if (entry.name.startsWith('.')) {
+			if (entry.name.startsWith('.'))
 				continue;
-			}
 
-			const fullPath = path.join(dir, entry.name);
+			const filePath = path.relative((this.app.vault.adapter as any).basePath, (entry as any).path + '\\' + entry.name);
 			if (entry.isDirectory()) {
-				files.push(...(await this.getFiles(fullPath)));
+				files.push({ path: filePath, type: 'dir', sha: '' });
+				files.push(...(await this.getFiles((this.app.vault.adapter as any).basePath + '\\' + filePath)));
 			} else {
-				files.push(fullPath);
+				files.push({ path: filePath, type: 'file', sha: '' });
 			}
 		}
 
@@ -269,17 +270,18 @@ export default class GitSync extends Plugin {
 			try {
 				const message = 'Vault saved at ' + this.getCurrentDate();
 
-				const files = await this.getFiles((this.app.vault.adapter as any).basePath);
+				const localFiles = await this.getFiles((this.app.vault.adapter as any).basePath);
+				console.log('LOCAL FILES:', localFiles)
 
-				const localPaths = new Set(
-					files.map(file =>
-						path.relative((this.app.vault.adapter as any).basePath, file).split(path.sep).join('/')
-					)
-				);
-				const repoFiles: { path: string, sha: string }[] | undefined = await this.fetchVault();
-				let filesToDelete = null;
+				const repoFiles: { path: string, type: string, sha: string }[] | undefined = await this.fetchVault();
+				console.log('REPO FILES:', repoFiles)
+
+				let filesToDelete: { path: string, type: string, sha: string }[] = []
 				if (repoFiles)
-					filesToDelete = repoFiles.filter(file => !localPaths.has(file.path));
+					filesToDelete = repoFiles.filter(repoFile =>
+						!localFiles.some(localFile => localFile.path === repoFile.path)
+					);
+				console.log('FILES TO DELETE:', filesToDelete)
 
 				// Handle file deletion
 				if (filesToDelete) {
@@ -304,26 +306,28 @@ export default class GitSync extends Plugin {
 				}
 
 				// Handle file creation or updating
-				for (const file of files) {
-					const relativePath = path.relative((this.app.vault.adapter as any).basePath, file).split(path.sep).join('/');
+				for (const file of localFiles) {
+					if (file.type === 'dir')
+						continue;
 
-					const fileContent = await fs.readFile(file);
+					const fileContent = await fs.readFile(path.join((this.app.vault.adapter as any).basePath, file.path));
 					const base64Content = fileContent.toString('base64');
 
+					// Check if file exists to update it
 					let existingSha: string = '';
 					try {
 						const existingFileResponse = await this.octokit.repos.getContent({
 							owner: this.settings.gitHubUsername,
 							repo: this.settings.gitHubRepoName,
-							path: relativePath
+							path: file.path
 						});
 
 						existingSha = (existingFileResponse.data as any).sha;
 					} catch (error) {
-						if (error.message.includes('404')) {
+						if (error.message.includes('404') || error.message.includes('Not Found') || error.message.includes('This repository is empty')) {
 							console.log('File not present in repository');
 						} else {
-							console.error(`Error checking ${relativePath}:`, error);
+							console.error(`Error checking ${file}:`, error);
 							throw error;
 						}
 					}
@@ -331,7 +335,7 @@ export default class GitSync extends Plugin {
 					await this.octokit.repos.createOrUpdateFileContents({
 						owner: this.settings.gitHubUsername,
 						repo: this.settings.gitHubRepoName,
-						path: relativePath,
+						path: file.path,
 						message: message,
 						content: base64Content,
 						committer: {
@@ -352,10 +356,11 @@ export default class GitSync extends Plugin {
 		}
 	}
 
+	//FIX: Folders are not beign deleted
 	async fetchVault() {
 		if (this.settings.isConfigured) {
 			try {
-				const files: { path: string, sha: string }[] = [];
+				const files: { path: string, type: string, sha: string }[] = [];
 
 				const response = await this.octokit.repos.getContent({
 					owner: this.settings.gitHubUsername,
@@ -379,9 +384,10 @@ export default class GitSync extends Plugin {
 		}
 	}
 
-	async processDirectories(items: any, files: { path: string, sha: string }[]) {
+	async processDirectories(items: any, files: { path: string, type: string, sha: string }[]) {
 		for (const item of items) {
 			if (item.type === 'dir') {
+				files.push({ path: item.path, type: 'dir', sha: item.sha });
 				const dirResponse = await this.octokit.repos.getContent({
 					owner: this.settings.gitHubUsername,
 					repo: this.settings.gitHubRepoName,
@@ -389,24 +395,59 @@ export default class GitSync extends Plugin {
 				});
 				await this.processDirectories(dirResponse.data, files)
 			} else if (item.type === 'file') {
-				files.push({ path: item.path, sha: item.sha });
+				files.push({ path: item.path, type: 'file', sha: item.sha });
 			}
 		}
 	}
 
+	//TODO: For now it gives priority to the repo's content
 	async pullVault() {
 		if (this.settings.isConfigured) {
 			try {
+				const localFiles = await this.getFiles((this.app.vault.adapter as any).basePath);
+				console.log('Local files', localFiles);
 
+				let repoFiles: { path: string, type: string, sha: string }[] | undefined = await this.fetchVault();
+				console.log('Repo files:', repoFiles);
+
+				//TODO: Only deleting if local files are older than the ones in the repo so newest changes have priority
+
+				// Stores the files that are on the local vault that are not on the repository to delete them
+				let filesToDelete: { path: string, type: string, sha: string }[] = [];
+				if (localFiles) {
+					filesToDelete = localFiles.filter(localFile => {
+						if (repoFiles)
+							return !repoFiles.some(repoFile => repoFile.path === localFile.path);
+					});
+				}
+				console.log('FILES TO DELETE:', filesToDelete);
+
+				// Handle file deletion
+				if (filesToDelete && filesToDelete.length > 0) {
+					console.log('Files to delete: ', filesToDelete)
+
+					const filesToDeleteSorted = filesToDelete.sort((a, b) => b.path.split(path.sep).length - a.path.split(path.sep).length);
+					for (const file of filesToDeleteSorted) {
+						const vaultFile = this.app.vault.getAbstractFileByPath(file.path.replace(/\\/g, '/'));
+						if (vaultFile) {
+							await this.app.vault.delete(vaultFile);
+						} else {
+							console.error('Obsidian could not find the file to delete:\n - File Path: ' + file.path + "\n - File returned by vault: " + vaultFile);
+						}
+					}
+				} else {
+					console.log('No files to delete')
+				}
 			} catch (error) {
-				new Notice(error, 4000);
+				console.error(error)
+				new Notice('Error pulling from repository', 4000);
 			}
 		} else {
 			new Notice('Plugin not configured', 4000);
 		}
 	}
 
-	// adds the commads to init, delete, commit, push, fetch, and toggle the interval
+	// Adds the commads to init, delete, commit, push, fetch, and toggle the interval
 	async loadCommands() {
 
 		// Command to push changes to the Git repository
@@ -587,6 +628,7 @@ class GitSyncSettingTab extends PluginSettingTab {
 					this.gitHubRepoText.setValue(this.plugin.settings.gitHubRepoName);
 
 					this.reloadFields();
+					await this.plugin.saveSettings();
 				})
 
 				if (this.plugin.settings.isConfigured)
@@ -710,6 +752,7 @@ class GitSyncSettingTab extends PluginSettingTab {
 
 
 					this.reloadFields();
+					await this.plugin.saveSettings();
 				})
 
 				if (!this.plugin.settings.isConfigured)
