@@ -1,4 +1,4 @@
-import { Plugin, PluginSettingTab, App, Setting, Notice, Tasks, TextComponent, ButtonComponent, ToggleComponent, TFile, TFolder } from 'obsidian';
+import { Plugin, PluginSettingTab, App, Setting, Notice, Tasks, TextComponent, ButtonComponent, ToggleComponent, TFile } from 'obsidian';
 import { Octokit } from "@octokit/rest";
 import * as fs from 'fs/promises';
 import * as path from 'path';
@@ -560,7 +560,7 @@ export default class GitSync extends Plugin {
 	async closeApp() {
 		if (!this.settings.isConfigured)
 			return;
-		
+
 		await this.stopGitInterval();
 		await this.saveSettings();
 		await this.pushVault();
