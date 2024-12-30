@@ -322,20 +322,20 @@ export default class GitSync extends Plugin {
 						console.error('Could not find file in vault:', file);
 						continue;
 					}
+
 					const fileContent = await this.app.vault.read(tFile);
+					const localFileSha = this.getSha(fileContent);
 					const base64Content = btoa(fileContent);
 
 					// Check if file exists to update it
-					let existingSha: string = '';
+					let existingFileResponse: any = null;
 					try {
 						//FIX: this shows error in the console when not finding something despite handling it prefectly
-						const existingFileResponse = await this.octokit.repos.getContent({
+						existingFileResponse = await this.octokit.repos.getContent({
 							owner: this.settings.gitHubUsername,
 							repo: this.settings.gitHubRepoName,
 							path: file.path
 						});
-
-						existingSha = (existingFileResponse.data as any).sha;
 					} catch (error) {
 						if (error.message.includes('404') || error.message.includes('Not Found') || error.message.includes('This repository is empty')) {
 							console.log('File not present in repository');
@@ -345,18 +345,35 @@ export default class GitSync extends Plugin {
 						}
 					}
 
-					await this.octokit.repos.createOrUpdateFileContents({
-						owner: this.settings.gitHubUsername,
-						repo: this.settings.gitHubRepoName,
-						path: file.path.replace(/\\/g, '/'),
-						message: message,
-						content: base64Content,
-						committer: {
-							name: this.settings.gitHubUsername,
-							email: this.settings.userEmail
-						},
-						sha: existingSha
-					});
+					if (localFileSha !== existingFileResponse.data.sha && existingFileResponse.data.content.trim() !== base64Content.trim()) {
+						await this.octokit.repos.createOrUpdateFileContents({
+							owner: this.settings.gitHubUsername,
+							repo: this.settings.gitHubRepoName,
+							path: file.path.replace(/\\/g, '/'),
+							message: message,
+							content: base64Content,
+							sha: existingFileResponse.data.sha,
+							committer: {
+								name: this.settings.gitHubUsername,
+								email: this.settings.userEmail
+							}
+						});
+
+						console.log(`Updating ${file.path}`)
+					} else if (localFileSha !== existingFileResponse.data.sha && existingFileResponse.data.content.trim() === base64Content.trim()) {
+						throw new Error(
+							`Error pushing vault, non matching SHAs on unchanged files:
+							
+							Local file: ${base64Content}
+								- SHA: ${localFileSha}
+
+							Repo file: ${existingFileResponse.data.content} 
+								- SHA: ${existingFileResponse.data.sha}`
+						);
+
+					} else {
+						console.log(`Ignoring ${file.path}`)
+					}
 
 					this.statusBarText.textContent = message;
 				}
@@ -416,7 +433,7 @@ export default class GitSync extends Plugin {
 
 	//NOTE: For now it gives priority to the repo's content and it does not handle conflicts
 	//TODO: add sha to check for modified files
-	
+
 	// Check's for new files in the repository and downloads them
 	async pullVault() {
 		if (this.settings.isConfigured) {
