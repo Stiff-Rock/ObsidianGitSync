@@ -1,4 +1,4 @@
-import { Plugin, PluginSettingTab, App, Setting, Notice, Tasks, TextComponent, ButtonComponent, ToggleComponent, TFile } from 'obsidian';
+import { Plugin, PluginSettingTab, App, Setting, Notice, Tasks, TextComponent, ButtonComponent, ToggleComponent, TFile, TFolder, TAbstractFile } from 'obsidian';
 import { Octokit } from "@octokit/rest";
 import * as CryptoJS from 'crypto-js';
 
@@ -252,7 +252,15 @@ export default class GitSync extends Plugin {
 		for (const entry of entries) {
 			if (entry) {
 				if (tFolders.includes(entry)) {
-					files.push({ path: entry.path, type: 'dir', sha: '' })
+					// TODO: calculate dir sha
+					const folder = this.app.vault.getAbstractFileByPath(entry.path);
+					if (folder) {
+						const sha = await this.getDirectorySha(folder);
+						files.push({ path: entry.path, type: 'dir', sha: sha })
+					} else {
+						console.error('Could not find directory in vault:', entry);
+						files.push({ path: entry.path, type: 'dir', sha: '' })
+					}
 				} else if (tFiles.includes(entry)) {
 					const sha = this.getSha(await this.app.vault.read(entry as TFile));
 					files.push({ path: entry.path, type: 'file', sha: sha })
@@ -269,6 +277,55 @@ export default class GitSync extends Plugin {
 		const blobString = `blob ${size}\0${fileContents}`;
 		return CryptoJS.SHA1(blobString).toString(CryptoJS.enc.Hex);
 	}
+
+	
+async getDirectorySha(directoryElement: TAbstractFile): Promise<string> {
+    function searchRecursively(file: TAbstractFile): TAbstractFile[] {
+        let filesAndDirs: TAbstractFile[] = [];
+
+        if (file instanceof TFolder) {
+            // Traverse subdirectories
+            for (const child of file.children) {
+                filesAndDirs.push(...searchRecursively(child));
+            }
+        } else if (file instanceof TFile) {
+            // Push file if it is a file
+            filesAndDirs.push(file);
+        }
+
+        return filesAndDirs;
+    }
+
+    // Get all files and directories under the given directory
+    const filesAndDirs = searchRecursively(directoryElement);
+    console.log('All files and directories:', filesAndDirs);
+
+    // Create the list of directory contents (including file paths and SHA)
+    const repoContentList: { path: string, sha: string }[] = [];
+
+    for (const file of filesAndDirs) {
+        if (file instanceof TFile) {
+            // Get the SHA for each file
+            const fileContent = await this.app.vault.read(file);
+            const fileSha = this.getSha(fileContent);
+            repoContentList.push({ path: file.path, sha: fileSha });
+        }
+    }
+
+    // Sort the list by path to ensure order consistency (important for matching GitHub's method)
+    repoContentList.sort((a, b) => a.path.localeCompare(b.path));
+
+    // Create the GitHub-style 'blob' string
+    const blobString = repoContentList.map(item => `blob ${item.sha.length}\0${item.sha}`).join('');
+    const size = blobString.length;
+    const finalSha = CryptoJS.SHA1(`blob ${size}\0${blobString}`).toString(CryptoJS.enc.Hex);
+
+    console.log(`FOLDER: ${directoryElement.path}`);
+    console.log(`Calculated SHA: ${finalSha}`);
+
+    return finalSha;
+}
+
 
 	// Uploads the new and updated files into the repository
 	async pushVault() {
@@ -459,12 +516,46 @@ export default class GitSync extends Plugin {
 
 		const localFiles = await this.getLocalFiles();
 		const repoFiles = await this.fetchVault();
-
-		const localFilesMap = new Map<string, FileInfo>(localFiles.map((file: FileInfo) => [file.path, file]));
+		console.log('REPO FILES', repoFiles)
 		const repoFilesMap = new Map<string, FileInfo>(repoFiles.map((file: FileInfo) => [file.path, file]));
 
-		console.log('Local Map:', localFilesMap);
-		console.log('Repo Map:', repoFilesMap);
+		const filesToDelete = [];
+		const filesToUpdate = [];
+
+		for (const localFile of localFiles) {
+			const repoFile = repoFilesMap.get(localFile.path);
+
+			if (!repoFile) {
+				filesToDelete.push(localFile);
+			} else if (repoFile.sha !== localFile.sha) {
+				filesToUpdate.push(localFile);
+			}
+		}
+
+		if (filesToDelete.length > 0 || filesToUpdate.length > 0) {
+			try {
+				if (filesToDelete.length > 0) {
+					const filesToDeleteSorted = filesToDelete.sort((a, b) => b.path.split('/').length - a.path.split('/').length);
+					for (const file of filesToDeleteSorted) {
+						const vaultFile = this.app.vault.getAbstractFileByPath(file.path.replace(/\\/g, '/'));
+						if (vaultFile)
+							await this.app.vault.delete(vaultFile);
+					}
+				}
+
+				if (filesToUpdate.length > 0) {
+					console.log('Files to update', filesToUpdate)
+					for (const file of filesToUpdate) {
+
+					}
+				}
+			} catch (error) {
+				console.error(error);
+				new Notice('Error pulling changes', 4000);
+			}
+		} else {
+			new Notice('Nothing to update', 4000);
+		}
 	}
 
 	// Helper function that fetches and donwloads the repository files and folders
