@@ -1,5 +1,6 @@
-import { Plugin, PluginSettingTab, App, Setting, Notice, Tasks, TextComponent, ButtonComponent, ToggleComponent, TFile, TAbstractFile } from 'obsidian';
+import { Plugin, PluginSettingTab, App, Setting, Notice, Tasks, TextComponent, ButtonComponent, ToggleComponent, TFile } from 'obsidian';
 import { Octokit } from "@octokit/rest";
+import * as CryptoJS from 'crypto-js';
 
 class GitSettings {
 	private _gitHubRepoName: string = '';
@@ -108,7 +109,9 @@ export default class GitSync extends Plugin {
 
 		// Check for local repos or newer versions and start the interval
 		this.app.workspace.onLayoutReady(async () => {
-			this.pullVault();
+			this.compareFilesSha()
+
+			//this.pullVault();
 
 			this.startGitInterval()
 
@@ -497,6 +500,16 @@ export default class GitSync extends Plugin {
 		}
 	}
 
+	// Calculates the SHA in the GitHub method of the given file content
+	compareFilesSha(fileContent: string): string {
+		const decodedContent = atob(fileContent);
+		const size = decodedContent.length;
+		const blobString = `blob ${size}\0${decodedContent}`;
+		const calculatedSha = CryptoJS.SHA1(blobString).toString(CryptoJS.enc.Hex);
+
+		return calculatedSha;
+	}
+
 	// Adds the commads to init, delete, commit, push, fetch, and toggle the interval
 	async loadCommands() {
 
@@ -562,12 +575,12 @@ export default class GitSync extends Plugin {
 	}
 
 	async closeApp() {
-		if (!this.settings.isConfigured)
-			return;
-
-		await this.stopGitInterval();
-		await this.saveSettings();
-		await this.pushVault();
+		//if (!this.settings.isConfigured)
+		//	return;
+		//
+		//await this.stopGitInterval();
+		//await this.saveSettings();
+		//await this.pushVault();
 	}
 }
 
