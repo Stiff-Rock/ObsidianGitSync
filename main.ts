@@ -1,7 +1,6 @@
 import { Plugin, PluginSettingTab, App, Setting, Notice, Tasks, TextComponent, ButtonComponent, ToggleComponent, TFile } from 'obsidian';
 import { Octokit } from "@octokit/rest";
 import * as CryptoJS from 'crypto-js';
-import { createNodeMiddleware } from 'octokit';
 
 class GitSettings {
 	private _gitHubRepoName: string = '';
@@ -265,8 +264,6 @@ export default class GitSync extends Plugin {
 		return CryptoJS.SHA1(blobString).toString(CryptoJS.enc.Hex);
 	}
 
-	//TODO: add sha to check for modified files
-
 	// Uploads the new and updated files into the repository
 	async pushVault() {
 		if (this.settings.isConfigured) {
@@ -275,7 +272,7 @@ export default class GitSync extends Plugin {
 
 				const localFiles = await this.getFiles();
 
-				const repoFiles: { path: string, type: string, sha: string }[] | undefined = await this.fetchVault();
+				const repoFiles: { path: string, type: string, sha: string }[] = await this.fetchVault();
 
 				let filesToDelete: { path: string, type: string, sha: string }[] = []
 				if (repoFiles)
@@ -397,53 +394,52 @@ export default class GitSync extends Plugin {
 		}
 	}
 
-	// Helper function obtains all the repository content and returns it
-	async fetchVault() {
-		if (this.settings.isConfigured) {
-			try {
-				const files: { path: string, type: string, sha: string }[] = [];
+	// Function that recursively searches and stores all the folders and files of the repository
+	async fetchVault(items: any = null): Promise<{ path: string, type: string, sha: string }[]> {
+		let files: { path: string, type: string, sha: string }[] = [];
 
+		if (!this.settings.isConfigured) {
+			new Notice('Plugin not configured', 4000);
+			throw new Error('Error fetching data: Plugin not configured')
+		}
+
+		try {
+			if (items === null) {
 				const response = await this.octokit.repos.getContent({
 					owner: this.settings.gitHubUsername,
 					repo: this.settings.gitHubRepoName,
 					path: ''
 				});
 
-				if (Array.isArray(response.data)) {
-					await this.processDirectories(response.data, files)
-				} else {
-					console.error('Error fetching data: ' + response)
-					return;
+				if (!Array.isArray(response.data))
+					throw new Error('Error fetching data: ' + response)
+			} else {
+				for (const item of items) {
+					if (item.type === 'dir') {
+						files.push({ path: item.path, type: 'dir', sha: item.sha });
+						const dirResponse = await this.octokit.repos.getContent({
+							owner: this.settings.gitHubUsername,
+							repo: this.settings.gitHubRepoName,
+							path: item.path
+						});
+						files.concat(await this.fetchVault(dirResponse.data))
+					} else if (item.type === 'file') {
+						files.push({ path: item.path, type: 'file', sha: item.sha });
+					}
 				}
-
-				return files;
-			} catch (error) {
-				new Notice(error, 4000);
 			}
-		} else {
-			new Notice('Plugin not configured', 4000);
-		}
-	}
-
-	// Helper function that recursively searches and stores all the folders and files of the repository
-	async processDirectories(items: any, files: { path: string, type: string, sha: string }[]) {
-		for (const item of items) {
-			if (item.type === 'dir') {
-				files.push({ path: item.path, type: 'dir', sha: item.sha });
-				const dirResponse = await this.octokit.repos.getContent({
-					owner: this.settings.gitHubUsername,
-					repo: this.settings.gitHubRepoName,
-					path: item.path
-				});
-				await this.processDirectories(dirResponse.data, files)
-			} else if (item.type === 'file') {
-				files.push({ path: item.path, type: 'file', sha: item.sha });
-			}
+		} catch (error) {
+			new Notice(error, 4000);
+		} finally {
+			return files;
 		}
 	}
 
 	//NOTE: For now it gives priority to the repo's content and it does not handle conflicts
-	//TODO: add sha to check for modified files
+
+	//TODO: Option 1: refactor method in such way where theres this loop where it iterates and compares through all files and then decides if it needs to update it or delete item
+
+	//TODO: Option 2: use the same .filter approach but with files that need updating?
 
 	// Check's for new files in the repository and downloads them
 	async pullVault() {
@@ -451,7 +447,7 @@ export default class GitSync extends Plugin {
 			try {
 				const localFiles = await this.getFiles();
 
-				let repoFiles: { path: string, type: string, sha: string }[] | undefined = await this.fetchVault();
+				let repoFiles: { path: string, type: string, sha: string }[] = await this.fetchVault();
 
 				//TODO: Only deleting if local files are older than the ones in the repo so newest changes have priority
 
