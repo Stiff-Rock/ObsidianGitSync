@@ -1,6 +1,7 @@
 import { Plugin, PluginSettingTab, App, Setting, Notice, Tasks, TextComponent, ButtonComponent, ToggleComponent, TFile } from 'obsidian';
 import { Octokit } from "@octokit/rest";
 import * as CryptoJS from 'crypto-js';
+import { createNodeMiddleware } from 'octokit';
 
 class GitSettings {
 	private _gitHubRepoName: string = '';
@@ -273,25 +274,21 @@ export default class GitSync extends Plugin {
 				const message = 'Vault saved at ' + this.getCurrentDate();
 
 				const localFiles = await this.getFiles();
-				console.log('LOCAL FILES:', localFiles)
 
 				const repoFiles: { path: string, type: string, sha: string }[] | undefined = await this.fetchVault();
-				console.log('REPO FILES:', repoFiles)
 
 				let filesToDelete: { path: string, type: string, sha: string }[] = []
 				if (repoFiles)
 					filesToDelete = repoFiles.filter(repoFile =>
 						!localFiles.some(localFile => localFile.path === repoFile.path)
 					);
-				console.log('FILES TO DELETE:', filesToDelete)
 
+				let deletedFiles: string[] = [];
 				// Handle file deletion
 				if (filesToDelete) {
 					for (const file of filesToDelete) {
 						if (file.type === 'dir')
 							continue;
-
-						console.log('PATH DELETION: ' + file.path)
 
 						try {
 							console.log(`Deleting ${file.path} from repository`);
@@ -306,12 +303,20 @@ export default class GitSync extends Plugin {
 									email: this.settings.userEmail
 								}
 							});
+
+							deletedFiles.push(file.path);
 						} catch (error) {
 							console.error(`Failed to delete ${file.path}:`, error);
 						}
+
 					}
+					console.log('Deleted files', deletedFiles);
 				}
 
+				let ignoredFiles: string[] = [];
+				let uploadedFiles: string[] = [];
+
+				const encoder = new TextEncoder();
 				// Handle file creation or updating
 				for (const file of localFiles) {
 					if (file.type === 'dir')
@@ -325,17 +330,23 @@ export default class GitSync extends Plugin {
 
 					const fileContent = await this.app.vault.read(tFile);
 					const localFileSha = this.getSha(fileContent);
-					const base64Content = btoa(fileContent);
+
+					const encodedContent = encoder.encode(fileContent);
+					const base64Content = btoa(String.fromCharCode.apply(null, encodedContent)).trim().replace(/\n/g, '');
 
 					// Check if file exists to update it
-					let existingFileResponse: any = null;
+					let repoFile: { content: string, sha: string } = { content: '', sha: '' };
 					try {
 						//FIX: this shows error in the console when not finding something despite handling it prefectly
-						existingFileResponse = await this.octokit.repos.getContent({
+						const existingFileResponse: any = await this.octokit.repos.getContent({
 							owner: this.settings.gitHubUsername,
 							repo: this.settings.gitHubRepoName,
 							path: file.path
 						});
+						repoFile.content = existingFileResponse.data.content.replace(/\n/g, '').trim();
+						repoFile.sha = existingFileResponse.data.sha;
+
+						deletedFiles.push(file.path);
 					} catch (error) {
 						if (error.message.includes('404') || error.message.includes('Not Found') || error.message.includes('This repository is empty')) {
 							console.log('File not present in repository');
@@ -345,38 +356,38 @@ export default class GitSync extends Plugin {
 						}
 					}
 
-					if (localFileSha !== existingFileResponse.data.sha && existingFileResponse.data.content.trim() !== base64Content.trim()) {
+					if (localFileSha !== repoFile.sha && repoFile.content !== base64Content) {
 						await this.octokit.repos.createOrUpdateFileContents({
 							owner: this.settings.gitHubUsername,
 							repo: this.settings.gitHubRepoName,
-							path: file.path.replace(/\\/g, '/'),
+							path: file.path,
 							message: message,
 							content: base64Content,
-							sha: existingFileResponse.data.sha,
+							sha: repoFile.sha,
 							committer: {
 								name: this.settings.gitHubUsername,
 								email: this.settings.userEmail
 							}
 						});
 
-						console.log(`Updating ${file.path}`)
-					} else if (localFileSha !== existingFileResponse.data.sha && existingFileResponse.data.content.trim() === base64Content.trim()) {
+						uploadedFiles.push(file.path);
+					} else if (localFileSha !== repoFile.sha && repoFile.content === base64Content) {
 						throw new Error(
 							`Error pushing vault, non matching SHAs on unchanged files:
 							
 							Local file: ${base64Content}
 								- SHA: ${localFileSha}
 
-							Repo file: ${existingFileResponse.data.content} 
-								- SHA: ${existingFileResponse.data.sha}`
+							Repo file: ${repoFile.content} 
+								- SHA: ${repoFile.sha}`
 						);
 
-					} else {
-						console.log(`Ignoring ${file.path}`)
 					}
 
 					this.statusBarText.textContent = message;
 				}
+				console.log('Uploaded files', uploadedFiles);
+				console.log('Ignored files', ignoredFiles);
 			} catch (error) {
 				console.error(error)
 				new Notice('Error pushing vault', 4000);
@@ -439,10 +450,8 @@ export default class GitSync extends Plugin {
 		if (this.settings.isConfigured) {
 			try {
 				const localFiles = await this.getFiles();
-				console.log('Local files', localFiles);
 
 				let repoFiles: { path: string, type: string, sha: string }[] | undefined = await this.fetchVault();
-				console.log('Repo files:', repoFiles);
 
 				//TODO: Only deleting if local files are older than the ones in the repo so newest changes have priority
 
@@ -454,11 +463,9 @@ export default class GitSync extends Plugin {
 							return !repoFiles.some(repoFile => repoFile.path === localFile.path);
 					});
 				}
-				console.log('FILES TO DELETE:', filesToDelete);
 
 				// Handle file deletion
 				if (filesToDelete && filesToDelete.length > 0) {
-					console.log('Files to delete: ', filesToDelete)
 
 					const filesToDeleteSorted = filesToDelete.reverse();
 					for (const file of filesToDeleteSorted) {
@@ -469,6 +476,7 @@ export default class GitSync extends Plugin {
 							console.error('Obsidian could not find the file to delete:\n - File Path: ' + file.path + "\n - File returned by vault: " + vaultFile);
 						}
 					}
+					console.log('Deleted files', filesToDelete);
 				} else {
 					console.log('No files to delete')
 				}
@@ -533,6 +541,40 @@ export default class GitSync extends Plugin {
 		}
 	}
 
+	getCurrentDate(): string {
+		const now = new Date();
+		return now.toLocaleString('en-US', {
+			hour: '2-digit',
+			minute: '2-digit',
+			second: '2-digit'
+		});
+	}
+
+	async checkRepositoryExists(): Promise<boolean> {
+		try {
+			await this.octokit.repos.get({
+				owner: this.settings.gitHubUsername,
+				repo: this.settings.gitHubRepoName,
+			});
+			return true;
+		} catch (error) {
+			if (error.status === 404) {
+				return false;
+			} else {
+				throw error;
+			}
+		}
+	}
+
+	async closeApp() {
+		//if (!this.settings.isConfigured)
+		//	return;
+		//
+		//await this.stopGitInterval();
+		//await this.saveSettings();
+		//await this.pushVault();
+	}
+
 	// Adds the commads to init, delete, commit, push, fetch, and toggle the interval
 	async loadCommands() {
 
@@ -570,40 +612,6 @@ export default class GitSync extends Plugin {
 				}
 			},
 		});
-	}
-
-	getCurrentDate(): string {
-		const now = new Date();
-		return now.toLocaleString('en-US', {
-			hour: '2-digit',
-			minute: '2-digit',
-			second: '2-digit'
-		});
-	}
-
-	async checkRepositoryExists(): Promise<boolean> {
-		try {
-			await this.octokit.repos.get({
-				owner: this.settings.gitHubUsername,
-				repo: this.settings.gitHubRepoName,
-			});
-			return true;
-		} catch (error) {
-			if (error.status === 404) {
-				return false;
-			} else {
-				throw error;
-			}
-		}
-	}
-
-	async closeApp() {
-		//if (!this.settings.isConfigured)
-		//	return;
-		//
-		//await this.stopGitInterval();
-		//await this.saveSettings();
-		//await this.pushVault();
 	}
 }
 
