@@ -109,8 +109,6 @@ export default class GitSync extends Plugin {
 
 		// Check for local repos or newer versions and start the interval
 		this.app.workspace.onLayoutReady(async () => {
-			this.compareFilesSha()
-
 			//this.pullVault();
 
 			this.startGitInterval()
@@ -237,7 +235,6 @@ export default class GitSync extends Plugin {
 	}
 
 	// Helper function to load in an array all the vault's files
-	// WARNING: Implement sha to comparing with repo files
 	async getFiles(): Promise<{ path: string, type: string, sha: string }[]> {
 		const files: { path: string, type: string, sha: string }[] = [];
 
@@ -248,17 +245,28 @@ export default class GitSync extends Plugin {
 
 		for (const entry of entries) {
 			if (entry) {
-				if (tFolders.includes(entry))
+				if (tFolders.includes(entry)) {
 					files.push({ path: entry.path, type: 'dir', sha: '' })
-				else if (tFiles.includes(entry))
-					files.push({ path: entry.path, type: 'file', sha: '' })
+				} else if (tFiles.includes(entry)) {
+					const sha = this.getSha(await this.app.vault.read(entry as TFile));
+					files.push({ path: entry.path, type: 'file', sha: sha })
+				}
 			}
 		}
 
 		return files;
 	}
 
-	// Pushses files into the repository
+	// Helper function that calculates the SHA in the GitHub method of the given file content
+	getSha(fileContents: string): string {
+		const size = fileContents.length;
+		const blobString = `blob ${size}\0${fileContents}`;
+		return CryptoJS.SHA1(blobString).toString(CryptoJS.enc.Hex);
+	}
+
+	//TODO: add sha to check for modified files
+
+	// Uploads the new and updated files into the repository
 	async pushVault() {
 		if (this.settings.isConfigured) {
 			try {
@@ -361,6 +369,7 @@ export default class GitSync extends Plugin {
 		}
 	}
 
+	// Helper function obtains all the repository content and returns it
 	async fetchVault() {
 		if (this.settings.isConfigured) {
 			try {
@@ -388,6 +397,7 @@ export default class GitSync extends Plugin {
 		}
 	}
 
+	// Helper function that recursively searches and stores all the folders and files of the repository
 	async processDirectories(items: any, files: { path: string, type: string, sha: string }[]) {
 		for (const item of items) {
 			if (item.type === 'dir') {
@@ -405,6 +415,9 @@ export default class GitSync extends Plugin {
 	}
 
 	//NOTE: For now it gives priority to the repo's content and it does not handle conflicts
+	//TODO: add sha to check for modified files
+	
+	// Check's for new files in the repository and downloads them
 	async pullVault() {
 		if (this.settings.isConfigured) {
 			try {
@@ -479,6 +492,9 @@ export default class GitSync extends Plugin {
 
 				const fileContent = atob((fileContentResponse.data as any).content);
 
+				//FIX: Characters outisde the LATIN1 range
+				console.log('Decoded content:', fileContent)
+
 				if (existingFile && existingFile instanceof TFile) {
 					await this.app.vault.modify(existingFile, fileContent);
 					console.log(`Updated file: ${vaultPath}`);
@@ -498,16 +514,6 @@ export default class GitSync extends Plugin {
 				await this.downloadRepoFiles(vaultPath);
 			}
 		}
-	}
-
-	// Calculates the SHA in the GitHub method of the given file content
-	getSha(fileContent: string): string {
-		const decodedContent = atob(fileContent);
-		const size = decodedContent.length;
-		const blobString = `blob ${size}\0${decodedContent}`;
-		const calculatedSha = CryptoJS.SHA1(blobString).toString(CryptoJS.enc.Hex);
-
-		return calculatedSha;
 	}
 
 	// Adds the commads to init, delete, commit, push, fetch, and toggle the interval
