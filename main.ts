@@ -1,7 +1,5 @@
-import { Plugin, PluginSettingTab, App, Setting, Notice, Tasks, TextComponent, ButtonComponent, ToggleComponent, TFile } from 'obsidian';
+import { Plugin, PluginSettingTab, App, Setting, Notice, Tasks, TextComponent, ButtonComponent, ToggleComponent, TFile, TAbstractFile } from 'obsidian';
 import { Octokit } from "@octokit/rest";
-import * as fs from 'fs/promises';
-import * as path from 'path';
 
 class GitSettings {
 	private _gitHubRepoName: string = '';
@@ -110,7 +108,7 @@ export default class GitSync extends Plugin {
 
 		// Check for local repos or newer versions and start the interval
 		this.app.workspace.onLayoutReady(async () => {
-			//TODO: Comprobar cambios antes de iniciar y pullearlos	
+			this.pullVault();
 
 			this.startGitInterval()
 
@@ -237,20 +235,20 @@ export default class GitSync extends Plugin {
 
 	// Helper function to load in an array all the vault's files
 	// WARNING: Implement sha to comparing with repo files
-	async getFiles(dir: string): Promise<{ path: string, type: string, sha: string }[]> {
+	async getFiles(): Promise<{ path: string, type: string, sha: string }[]> {
 		const files: { path: string, type: string, sha: string }[] = [];
-		const entries = await fs.readdir(dir, { withFileTypes: true });
+
+		const tFiles: any = this.app.vault.getFiles()
+		const tFolders: any = this.app.vault.getAllFolders();
+
+		const entries = [...tFiles, ...tFolders];
 
 		for (const entry of entries) {
-			if (entry.name.startsWith('.'))
-				continue;
-
-			const filePath = path.relative((this.app.vault.adapter as any).basePath, (entry as any).path + '\\' + entry.name);
-			if (entry.isDirectory()) {
-				files.push({ path: filePath, type: 'dir', sha: '' });
-				files.push(...(await this.getFiles((this.app.vault.adapter as any).basePath + '\\' + filePath)));
-			} else {
-				files.push({ path: filePath, type: 'file', sha: '' });
+			if (entry) {
+				if (tFolders.includes(entry))
+					files.push({ path: entry.path, type: 'dir', sha: '' })
+				else if (tFiles.includes(entry))
+					files.push({ path: entry.path, type: 'file', sha: '' })
 			}
 		}
 
@@ -263,7 +261,7 @@ export default class GitSync extends Plugin {
 			try {
 				const message = 'Vault saved at ' + this.getCurrentDate();
 
-				const localFiles = await this.getFiles((this.app.vault.adapter as any).basePath);
+				const localFiles = await this.getFiles();
 				console.log('LOCAL FILES:', localFiles)
 
 				const repoFiles: { path: string, type: string, sha: string }[] | undefined = await this.fetchVault();
@@ -308,8 +306,13 @@ export default class GitSync extends Plugin {
 					if (file.type === 'dir')
 						continue;
 
-					const fileContent = await fs.readFile(path.join((this.app.vault.adapter as any).basePath, file.path));
-					const base64Content = fileContent.toString('base64');
+					const tFile = this.app.vault.getFileByPath(file.path);
+					if (!tFile) {
+						console.error('Could not find file in vault:', file);
+						continue;
+					}
+					const fileContent = await this.app.vault.read(tFile);
+					const base64Content = btoa(fileContent);
 
 					// Check if file exists to update it
 					let existingSha: string = '';
@@ -398,11 +401,11 @@ export default class GitSync extends Plugin {
 		}
 	}
 
-	//NOTE: For now it gives priority to the repo's content
+	//NOTE: For now it gives priority to the repo's content and it does not handle conflicts
 	async pullVault() {
 		if (this.settings.isConfigured) {
 			try {
-				const localFiles = await this.getFiles((this.app.vault.adapter as any).basePath);
+				const localFiles = await this.getFiles();
 				console.log('Local files', localFiles);
 
 				let repoFiles: { path: string, type: string, sha: string }[] | undefined = await this.fetchVault();
@@ -424,7 +427,7 @@ export default class GitSync extends Plugin {
 				if (filesToDelete && filesToDelete.length > 0) {
 					console.log('Files to delete: ', filesToDelete)
 
-					const filesToDeleteSorted = filesToDelete.sort((a, b) => b.path.split(path.sep).length - a.path.split(path.sep).length);
+					const filesToDeleteSorted = filesToDelete.reverse();
 					for (const file of filesToDeleteSorted) {
 						const vaultFile = this.app.vault.getAbstractFileByPath(file.path.replace(/\\/g, '/'));
 						if (vaultFile) {
@@ -470,7 +473,8 @@ export default class GitSync extends Plugin {
 					repo: this.settings.gitHubRepoName,
 					path: filePath,
 				});
-				const fileContent = Buffer.from((fileContentResponse.data as any).content, 'base64').toString('utf-8');
+
+				const fileContent = atob((fileContentResponse.data as any).content);
 
 				if (existingFile && existingFile instanceof TFile) {
 					await this.app.vault.modify(existingFile, fileContent);
