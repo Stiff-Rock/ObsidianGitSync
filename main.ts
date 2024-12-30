@@ -501,7 +501,7 @@ export default class GitSync extends Plugin {
 	}
 
 	// Calculates the SHA in the GitHub method of the given file content
-	compareFilesSha(fileContent: string): string {
+	getSha(fileContent: string): string {
 		const decodedContent = atob(fileContent);
 		const size = decodedContent.length;
 		const blobString = `blob ${size}\0${decodedContent}`;
