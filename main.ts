@@ -252,15 +252,7 @@ export default class GitSync extends Plugin {
 		for (const entry of entries) {
 			if (entry) {
 				if (tFolders.includes(entry)) {
-					// TODO: calculate dir sha
-					const folder = this.app.vault.getAbstractFileByPath(entry.path);
-					if (folder) {
-						const sha = await this.getDirectorySha(folder);
-						files.push({ path: entry.path, type: 'dir', sha: sha })
-					} else {
-						console.error('Could not find directory in vault:', entry);
-						files.push({ path: entry.path, type: 'dir', sha: '' })
-					}
+					files.push({ path: entry.path, type: 'dir', sha: '' })
 				} else if (tFiles.includes(entry)) {
 					const sha = this.getSha(await this.app.vault.read(entry as TFile));
 					files.push({ path: entry.path, type: 'file', sha: sha })
@@ -277,55 +269,6 @@ export default class GitSync extends Plugin {
 		const blobString = `blob ${size}\0${fileContents}`;
 		return CryptoJS.SHA1(blobString).toString(CryptoJS.enc.Hex);
 	}
-
-	
-async getDirectorySha(directoryElement: TAbstractFile): Promise<string> {
-    function searchRecursively(file: TAbstractFile): TAbstractFile[] {
-        let filesAndDirs: TAbstractFile[] = [];
-
-        if (file instanceof TFolder) {
-            // Traverse subdirectories
-            for (const child of file.children) {
-                filesAndDirs.push(...searchRecursively(child));
-            }
-        } else if (file instanceof TFile) {
-            // Push file if it is a file
-            filesAndDirs.push(file);
-        }
-
-        return filesAndDirs;
-    }
-
-    // Get all files and directories under the given directory
-    const filesAndDirs = searchRecursively(directoryElement);
-    console.log('All files and directories:', filesAndDirs);
-
-    // Create the list of directory contents (including file paths and SHA)
-    const repoContentList: { path: string, sha: string }[] = [];
-
-    for (const file of filesAndDirs) {
-        if (file instanceof TFile) {
-            // Get the SHA for each file
-            const fileContent = await this.app.vault.read(file);
-            const fileSha = this.getSha(fileContent);
-            repoContentList.push({ path: file.path, sha: fileSha });
-        }
-    }
-
-    // Sort the list by path to ensure order consistency (important for matching GitHub's method)
-    repoContentList.sort((a, b) => a.path.localeCompare(b.path));
-
-    // Create the GitHub-style 'blob' string
-    const blobString = repoContentList.map(item => `blob ${item.sha.length}\0${item.sha}`).join('');
-    const size = blobString.length;
-    const finalSha = CryptoJS.SHA1(`blob ${size}\0${blobString}`).toString(CryptoJS.enc.Hex);
-
-    console.log(`FOLDER: ${directoryElement.path}`);
-    console.log(`Calculated SHA: ${finalSha}`);
-
-    return finalSha;
-}
-
 
 	// Uploads the new and updated files into the repository
 	async pushVault() {
@@ -516,11 +459,12 @@ async getDirectorySha(directoryElement: TAbstractFile): Promise<string> {
 
 		const localFiles = await this.getLocalFiles();
 		const repoFiles = await this.fetchVault();
-		console.log('REPO FILES', repoFiles)
+
+		const localFilesMap = new Map<string, FileInfo>(localFiles.map((file: FileInfo) => [file.path, file]));
 		const repoFilesMap = new Map<string, FileInfo>(repoFiles.map((file: FileInfo) => [file.path, file]));
 
 		const filesToDelete = [];
-		const filesToUpdate = [];
+		const filesToCreateOrUpdate = [];
 
 		for (const localFile of localFiles) {
 			const repoFile = repoFilesMap.get(localFile.path);
@@ -528,11 +472,18 @@ async getDirectorySha(directoryElement: TAbstractFile): Promise<string> {
 			if (!repoFile) {
 				filesToDelete.push(localFile);
 			} else if (repoFile.sha !== localFile.sha) {
-				filesToUpdate.push(localFile);
+				if (repoFile.type === 'file')
+					filesToCreateOrUpdate.push(localFile);
 			}
+
+			repoFilesMap.delete(localFile.path);
 		}
 
-		if (filesToDelete.length > 0 || filesToUpdate.length > 0) {
+		for (const [, repoFile] of repoFilesMap) {
+			filesToCreateOrUpdate.push(repoFile);
+		}
+
+		if (filesToDelete.length > 0 || filesToCreateOrUpdate.length > 0) {
 			try {
 				if (filesToDelete.length > 0) {
 					const filesToDeleteSorted = filesToDelete.sort((a, b) => b.path.split('/').length - a.path.split('/').length);
@@ -543,10 +494,10 @@ async getDirectorySha(directoryElement: TAbstractFile): Promise<string> {
 					}
 				}
 
-				if (filesToUpdate.length > 0) {
-					console.log('Files to update', filesToUpdate)
-					for (const file of filesToUpdate) {
-
+				if (filesToCreateOrUpdate.length > 0) {
+					console.log('Files to create/update', filesToCreateOrUpdate)
+					for (const file of filesToCreateOrUpdate) {
+						this.downloadRepoFiles(file);
 					}
 				}
 			} catch (error) {
@@ -558,50 +509,38 @@ async getDirectorySha(directoryElement: TAbstractFile): Promise<string> {
 		}
 	}
 
-	// Helper function that fetches and donwloads the repository files and folders
-	async downloadRepoFiles(searchPath: string = '') {
-		const getContentResponse = await this.octokit.repos.getContent({
-			owner: this.settings.gitHubUsername,
-			repo: this.settings.gitHubRepoName,
-			path: searchPath
-		});
+	// Helper function that fetches and and creates the repository files and folders
+	async downloadRepoFiles(file: FileInfo) {
+		const filePath = file.path;
+		const vaultPath = filePath.replace(/\\/g, '/');
 
-		console.log('DATA:', getContentResponse.data)
+		if (file.type === 'file') {
+			const existingFile = this.app.vault.getAbstractFileByPath(vaultPath);
+			const fileContentResponse = await this.octokit.rest.repos.getContent({
+				owner: this.settings.gitHubUsername,
+				repo: this.settings.gitHubRepoName,
+				path: filePath,
+			});
 
-		for (const file of getContentResponse.data as any) {
-			const filePath = file.path;
-			const vaultPath = filePath.replace(/\\/g, '/');
+			const fileContent = atob((fileContentResponse.data as any).content);
 
-			if (file.type === 'file') {
-				const existingFile = this.app.vault.getAbstractFileByPath(vaultPath);
-				const fileContentResponse = await this.octokit.rest.repos.getContent({
-					owner: this.settings.gitHubUsername,
-					repo: this.settings.gitHubRepoName,
-					path: filePath,
-				});
+			//FIX: Characters outisde the LATIN1 range
 
-				const fileContent = atob((fileContentResponse.data as any).content);
+			if (existingFile && existingFile instanceof TFile) {
+				await this.app.vault.modify(existingFile, fileContent);
+				console.log(`Updated file: ${vaultPath}`);
+			} else {
+				await this.app.vault.create(vaultPath, fileContent);
+				console.log(`Created file: ${vaultPath}`);
+			}
+		} else if (file.type === 'dir') {
+			const folderExists = this.app.vault.getAbstractFileByPath(vaultPath);
 
-				//FIX: Characters outisde the LATIN1 range
-				console.log('Decoded content:', fileContent)
-
-				if (existingFile && existingFile instanceof TFile) {
-					await this.app.vault.modify(existingFile, fileContent);
-					console.log(`Updated file: ${vaultPath}`);
-				} else {
-					await this.app.vault.create(vaultPath, fileContent);
-					console.log(`Created file: ${vaultPath}`);
-				}
-			} else if (file.type === 'dir') {
-				const folderExists = this.app.vault.getAbstractFileByPath(vaultPath);
-
-				if (!folderExists) {
-					await this.app.vault.createFolder(vaultPath);
-					console.log(`Created folder: ${vaultPath}`);
-				} else {
-					console.log(`Folder already exists: ${vaultPath}`);
-				}
-				await this.downloadRepoFiles(vaultPath);
+			if (!folderExists) {
+				await this.app.vault.createFolder(vaultPath);
+				console.log(`Created folder: ${vaultPath}`);
+			} else {
+				console.log(`Folder already exists: ${vaultPath}`);
 			}
 		}
 	}
