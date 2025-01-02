@@ -331,28 +331,10 @@ export default class GitSync extends Plugin {
 						continue;
 					}
 
-					let fileContent = await this.app.vault.read(tFile);
-					fileContent = this.replaceSpecialChars(fileContent);
+					const fileContent = await this.app.vault.read(tFile);
 
 					const localFileSha = this.getSha(fileContent);
-
-					const fileBlob = new Blob([fileContent], { type: "text/plain; charset=utf-8" });
-
-					const base64Content = await new Promise<string>((resolve, reject) => {
-						const reader = new FileReader();
-						reader.onload = () => {
-							const result = reader.result as string;
-
-							if (result === "data:text/plain; charset=utf-8;base64,") {
-								resolve("");
-							} else {
-								const base64Data = result.split(",")[1] || result;
-								resolve(base64Data.trim().replace(/\n/g, ""));
-							}
-						};
-						reader.onerror = () => reject(reader.error);
-						reader.readAsDataURL(fileBlob);
-					});
+					const base64Content = await this.encodeToBase64(fileContent);
 
 					// Check if file exists to update it
 					let repoFile: { base64Content: string, sha: string } = { base64Content: '', sha: '' };
@@ -427,27 +409,26 @@ export default class GitSync extends Plugin {
 		}
 	}
 
-	replaceSpecialChars(text: string) {
-		const unicodeMap: Record<string, string> = {
-			// Lowercase vowels with accents
-			'á': 'a', 'é': 'e', 'í': 'i', 'ó': 'o', 'ú': 'u',
-			'à': 'a', 'è': 'e', 'ì': 'i', 'ò': 'o', 'ù': 'u',
-			'ä': 'a', 'ë': 'e', 'ï': 'i', 'ö': 'o', 'ü': 'u',
-			'â': 'a', 'ê': 'e', 'î': 'i', 'ô': 'o', 'û': 'u',
+	// Helper function to encode content string to base64
+	async encodeToBase64(fileContent: string) {
+		const fileBlob = new Blob([fileContent], { type: "text/plain; charset=utf-8" });
+		const base64Content = await new Promise<string>((resolve, reject) => {
+			const reader = new FileReader();
+			reader.onload = () => {
+				const result = reader.result as string;
 
-			// Uppercase vowels with accents
-			'Á': 'A', 'É': 'E', 'Í': 'I', 'Ó': 'O', 'Ú': 'U',
-			'À': 'A', 'È': 'E', 'Ì': 'I', 'Ò': 'O', 'Ù': 'U',
-			'Ä': 'A', 'Ë': 'E', 'Ï': 'I', 'Ö': 'O', 'Ü': 'U',
-			'Â': 'A', 'Ê': 'E', 'Î': 'I', 'Ô': 'O', 'Û': 'U',
+				if (result === "data:text/plain; charset=utf-8;base64,") {
+					resolve("");
+				} else {
+					const base64Data = result.split(",")[1] || result;
+					resolve(base64Data.trim().replace(/\n/g, ""));
+				}
+			};
+			reader.onerror = () => reject(reader.error);
+			reader.readAsDataURL(fileBlob);
+		});
 
-			// Additional special characters
-			'ñ': 'n', 'Ñ': 'N', 'ç': 'c', 'Ç': 'C',
-			'ß': 'ss', 'œ': 'oe', 'Œ': 'OE',
-			'æ': 'ae', 'Æ': 'AE',
-		};
-
-		return text.replace(/[áéíóúàèìòùäëïöüâêîôûÁÉÍÓÚÀÈÌÒÙÄËÏÖÜÂÊÎÔÛñÑçÇßœŒæÆ]/g, (match) => unicodeMap[match] ?? match);
+		return base64Content;
 	}
 
 	// Function that recursively searches and stores all the folders and files of the repository
