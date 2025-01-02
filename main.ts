@@ -1,4 +1,4 @@
-import { Plugin, PluginSettingTab, App, Setting, Notice, Tasks, TextComponent, ButtonComponent, ToggleComponent, TFile} from 'obsidian';
+import { Plugin, PluginSettingTab, App, Setting, Notice, Tasks, TextComponent, ButtonComponent, ToggleComponent, TFile } from 'obsidian';
 import { Octokit } from "@octokit/rest";
 import * as CryptoJS from 'crypto-js';
 
@@ -331,7 +331,8 @@ export default class GitSync extends Plugin {
 						continue;
 					}
 
-					const fileContent = await this.app.vault.read(tFile);
+					let fileContent = await this.app.vault.read(tFile);
+					fileContent = this.replaceSpecialChars(fileContent);
 
 					const localFileSha = this.getSha(fileContent);
 
@@ -424,6 +425,29 @@ export default class GitSync extends Plugin {
 		} else {
 			new Notice('Plugin not configured', 4000);
 		}
+	}
+
+	replaceSpecialChars(text: string) {
+		const unicodeMap: Record<string, string> = {
+			// Lowercase vowels with accents
+			'á': 'a', 'é': 'e', 'í': 'i', 'ó': 'o', 'ú': 'u',
+			'à': 'a', 'è': 'e', 'ì': 'i', 'ò': 'o', 'ù': 'u',
+			'ä': 'a', 'ë': 'e', 'ï': 'i', 'ö': 'o', 'ü': 'u',
+			'â': 'a', 'ê': 'e', 'î': 'i', 'ô': 'o', 'û': 'u',
+
+			// Uppercase vowels with accents
+			'Á': 'A', 'É': 'E', 'Í': 'I', 'Ó': 'O', 'Ú': 'U',
+			'À': 'A', 'È': 'E', 'Ì': 'I', 'Ò': 'O', 'Ù': 'U',
+			'Ä': 'A', 'Ë': 'E', 'Ï': 'I', 'Ö': 'O', 'Ü': 'U',
+			'Â': 'A', 'Ê': 'E', 'Î': 'I', 'Ô': 'O', 'Û': 'U',
+
+			// Additional special characters
+			'ñ': 'n', 'Ñ': 'N', 'ç': 'c', 'Ç': 'C',
+			'ß': 'ss', 'œ': 'oe', 'Œ': 'OE',
+			'æ': 'ae', 'Æ': 'AE',
+		};
+
+		return text.replace(/[áéíóúàèìòùäëïöüâêîôûÁÉÍÓÚÀÈÌÒÙÄËÏÖÜÂÊÎÔÛñÑçÇßœŒæÆ]/g, (match) => unicodeMap[match] ?? match);
 	}
 
 	// Function that recursively searches and stores all the folders and files of the repository
