@@ -1,4 +1,4 @@
-import { Plugin, PluginSettingTab, App, Setting, Notice, Tasks, TextComponent, ButtonComponent, ToggleComponent, TFile, TFolder, TAbstractFile } from 'obsidian';
+import { Plugin, PluginSettingTab, App, Setting, Notice, Tasks, TextComponent, ButtonComponent, ToggleComponent, TFile} from 'obsidian';
 import { Octokit } from "@octokit/rest";
 import * as CryptoJS from 'crypto-js';
 
@@ -319,11 +319,11 @@ export default class GitSync extends Plugin {
 				let ignoredFiles: string[] = [];
 				let uploadedFiles: string[] = [];
 
-				const encoder = new TextEncoder();
 				// Handle file creation or updating
 				for (const file of localFiles) {
 					if (file.type === 'dir')
 						continue;
+					console.log('Pushing:', file.path);
 
 					const tFile = this.app.vault.getFileByPath(file.path);
 					if (!tFile) {
@@ -332,13 +332,29 @@ export default class GitSync extends Plugin {
 					}
 
 					const fileContent = await this.app.vault.read(tFile);
+
 					const localFileSha = this.getSha(fileContent);
 
-					const encodedContent = encoder.encode(fileContent);
-					const base64Content = btoa(String.fromCharCode.apply(null, encodedContent)).trim().replace(/\n/g, '');
+					const fileBlob = new Blob([fileContent], { type: "text/plain; charset=utf-8" });
+
+					const base64Content = await new Promise<string>((resolve, reject) => {
+						const reader = new FileReader();
+						reader.onload = () => {
+							const result = reader.result as string;
+
+							if (result === "data:text/plain; charset=utf-8;base64,") {
+								resolve("");
+							} else {
+								const base64Data = result.split(",")[1] || result;
+								resolve(base64Data.trim().replace(/\n/g, ""));
+							}
+						};
+						reader.onerror = () => reject(reader.error);
+						reader.readAsDataURL(fileBlob);
+					});
 
 					// Check if file exists to update it
-					let repoFile: { content: string, sha: string } = { content: '', sha: '' };
+					let repoFile: { base64Content: string, sha: string } = { base64Content: '', sha: '' };
 					try {
 						//FIX: this shows error in the console when not finding something despite handling it prefectly
 						const existingFileResponse: any = await this.octokit.repos.getContent({
@@ -346,7 +362,7 @@ export default class GitSync extends Plugin {
 							repo: this.settings.gitHubRepoName,
 							path: file.path
 						});
-						repoFile.content = existingFileResponse.data.content.replace(/\n/g, '').trim();
+						repoFile.base64Content = existingFileResponse.data.content.replace(/\n/g, '').trim();
 						repoFile.sha = existingFileResponse.data.sha;
 
 						deletedFiles.push(file.path);
@@ -358,8 +374,7 @@ export default class GitSync extends Plugin {
 							throw error;
 						}
 					}
-
-					if (localFileSha !== repoFile.sha && repoFile.content !== base64Content) {
+					if (localFileSha !== repoFile.sha && repoFile.base64Content !== base64Content) {
 						await this.octokit.repos.createOrUpdateFileContents({
 							owner: this.settings.gitHubUsername,
 							repo: this.settings.gitHubRepoName,
@@ -374,21 +389,32 @@ export default class GitSync extends Plugin {
 						});
 
 						uploadedFiles.push(file.path);
-					} else if (localFileSha !== repoFile.sha && repoFile.content === base64Content) {
+					} else if (localFileSha !== repoFile.sha && repoFile.base64Content.trim().length !== 0 && repoFile.base64Content === base64Content) {
 						throw new Error(
-							`Error pushing vault, non matching SHAs on unchanged files:
+							`Error pushing vault, non matching SHAs on matching contents:
 							
-							Local file: ${base64Content}
+							File: ${file.path}
+
+							Local file:
 								- SHA: ${localFileSha}
+								- Content: ${fileContent}
+								- Encoded content: ${base64Content}
 
-							Repo file: ${repoFile.content} 
-								- SHA: ${repoFile.sha}`
+							Encoded Repo file:  
+								- SHA: ${repoFile.sha}
+								- Content: ${atob(repoFile.base64Content)}
+								- Encoded content: ${repoFile.base64Content}
+
+							Matches:
+								- SHA: ${localFileSha === repoFile.sha}
+								- Content: ${fileContent === atob(repoFile.base64Content)}
+								- Encoded content: ${base64Content === repoFile.base64Content}\n`
 						);
-
 					}
-
+					//TODO: i think empty fgiles are not being uploaded
 					this.statusBarText.textContent = message;
 				}
+				console.log('--FINISHED PUSH--');
 				console.log('Uploaded files', uploadedFiles);
 				console.log('Ignored files', ignoredFiles);
 			} catch (error) {
@@ -460,7 +486,6 @@ export default class GitSync extends Plugin {
 		const localFiles = await this.getLocalFiles();
 		const repoFiles = await this.fetchVault();
 
-		const localFilesMap = new Map<string, FileInfo>(localFiles.map((file: FileInfo) => [file.path, file]));
 		const repoFilesMap = new Map<string, FileInfo>(repoFiles.map((file: FileInfo) => [file.path, file]));
 
 		const filesToDelete = [];
@@ -500,6 +525,9 @@ export default class GitSync extends Plugin {
 						this.downloadRepoFiles(file);
 					}
 				}
+
+				console.log('--FINISHED PULL--');
+				new Notice('Vault updated succesfully', 4000);
 			} catch (error) {
 				console.error(error);
 				new Notice('Error pulling changes', 4000);
