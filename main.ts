@@ -1,6 +1,7 @@
 import { Plugin, PluginSettingTab, App, Setting, Notice, Tasks, TextComponent, ButtonComponent, ToggleComponent, TFile } from 'obsidian';
 import { Octokit } from "@octokit/rest";
 import * as CryptoJS from 'crypto-js';
+import { Base64 } from 'js-base64';
 
 class GitSettings {
 	private _gitHubRepoName: string = '';
@@ -265,116 +266,132 @@ export default class GitSync extends Plugin {
 
 	// Helper function that calculates the SHA in the GitHub method of the given file content
 	getSha(fileContents: string): string {
-		const size = fileContents.length;
+		const encoder = new TextEncoder();
+		const encodedContent = encoder.encode(fileContents);
+		const size = encodedContent.length;
 		const blobString = `blob ${size}\0${fileContents}`;
 		return CryptoJS.SHA1(blobString).toString(CryptoJS.enc.Hex);
 	}
 
 	// Uploads the new and updated files into the repository
 	async pushVault() {
-		if (this.settings.isConfigured) {
-			try {
-				const message = 'Vault saved at ' + this.getCurrentDate();
+		if (!this.settings.isConfigured) {
+			new Notice('Plugin not configured', 4000);
+			return;
+		}
 
-				const localFiles = await this.getLocalFiles();
+		try {
+			const message = 'Vault saved at ' + this.getCurrentDate();
 
-				const repoFiles: FileInfo[] = await this.fetchVault();
+			const localFiles = await this.getLocalFiles();
 
-				let filesToDelete: FileInfo[] = []
-				if (repoFiles)
-					filesToDelete = repoFiles.filter(repoFile =>
-						!localFiles.some(localFile => localFile.path === repoFile.path)
-					);
+			const repoFiles: FileInfo[] = await this.fetchVault();
 
-				let deletedFiles: string[] = [];
-				// Handle file deletion
-				if (filesToDelete) {
-					for (const file of filesToDelete) {
-						if (file.type === 'dir')
-							continue;
+			let filesToDelete: FileInfo[] = []
+			if (repoFiles)
+				filesToDelete = repoFiles.filter(repoFile =>
+					!localFiles.some(localFile => localFile.path === repoFile.path)
+				);
 
-						try {
-							console.log(`Deleting ${file.path} from repository`);
-							await this.octokit.repos.deleteFile({
-								owner: this.settings.gitHubUsername,
-								repo: this.settings.gitHubRepoName,
-								path: file.path,
-								message: `Deleted file ${file.path}`,
-								sha: file.sha,
-								committer: {
-									name: this.settings.gitHubUsername,
-									email: this.settings.userEmail
-								}
-							});
-
-							deletedFiles.push(file.path);
-						} catch (error) {
-							console.error(`Failed to delete ${file.path}:`, error);
-						}
-
-					}
-					console.log('Deleted files', deletedFiles);
-				}
-
-				let ignoredFiles: string[] = [];
-				let uploadedFiles: string[] = [];
-
-				// Handle file creation or updating
-				for (const file of localFiles) {
+			let deletedFiles: string[] = [];
+			// Handle file deletion
+			if (filesToDelete) {
+				for (const file of filesToDelete) {
 					if (file.type === 'dir')
 						continue;
-					console.log('Pushing:', file.path);
 
-					const tFile = this.app.vault.getFileByPath(file.path);
-					if (!tFile) {
-						console.error('Could not find file in vault:', file);
-						continue;
-					}
-
-					const fileContent = await this.app.vault.read(tFile);
-
-					const localFileSha = this.getSha(fileContent);
-					const base64Content = await this.encodeToBase64(fileContent);
-
-					// Check if file exists to update it
-					let repoFile: { base64Content: string, sha: string } = { base64Content: '', sha: '' };
 					try {
-						//FIX: this shows error in the console when not finding something despite handling it prefectly
-						const existingFileResponse: any = await this.octokit.repos.getContent({
-							owner: this.settings.gitHubUsername,
-							repo: this.settings.gitHubRepoName,
-							path: file.path
-						});
-						repoFile.base64Content = existingFileResponse.data.content.replace(/\n/g, '').trim();
-						repoFile.sha = existingFileResponse.data.sha;
-
-						deletedFiles.push(file.path);
-					} catch (error) {
-						if (error.message.includes('404') || error.message.includes('Not Found') || error.message.includes('This repository is empty')) {
-							console.log('File not present in repository');
-						} else {
-							console.error(`Error checking ${file}:`, error);
-							throw error;
-						}
-					}
-					if (localFileSha !== repoFile.sha && repoFile.base64Content !== base64Content) {
-						await this.octokit.repos.createOrUpdateFileContents({
+						console.log(`Deleting ${file.path} from repository`);
+						await this.octokit.repos.deleteFile({
 							owner: this.settings.gitHubUsername,
 							repo: this.settings.gitHubRepoName,
 							path: file.path,
-							message: message,
-							content: base64Content,
-							sha: repoFile.sha,
+							message: `Deleted file ${file.path}`,
+							sha: file.sha,
 							committer: {
 								name: this.settings.gitHubUsername,
 								email: this.settings.userEmail
 							}
 						});
 
-						uploadedFiles.push(file.path);
-					} else if (localFileSha !== repoFile.sha && repoFile.base64Content.trim().length !== 0 && repoFile.base64Content === base64Content) {
-						throw new Error(
-							`Error pushing vault, non matching SHAs on matching contents:
+						deletedFiles.push(file.path);
+					} catch (error) {
+						console.error(`Failed to delete ${file.path}:`, error);
+					}
+
+				}
+				console.log('Deleted files', deletedFiles);
+			}
+
+			let ignoredFiles: string[] = [];
+			let uploadedFiles: string[] = [];
+
+			// Handle file creation or updating
+			for (const file of localFiles) {
+				if (file.type === 'dir')
+					continue;
+				console.log('Checking:', file.path);
+
+				const tFile = this.app.vault.getFileByPath(file.path);
+				if (!tFile) {
+					console.error('Could not find file in vault:', file);
+					continue;
+				}
+
+				const fileContent = await this.app.vault.read(tFile);
+
+				if (fileContent.length === 0) {
+					await this.app.vault.modify(tFile, 'Placeholder text so empty files don\'t get deleted by github');
+				}
+
+				const localFileSha = this.getSha(fileContent);
+
+				// Check if file exists to update it
+				let repoFile: { base64Content: string, sha: string } = { base64Content: '', sha: '' };
+				try {
+					//FIX: this shows error in the console when not finding something despite handling it prefectly
+					const existingFileResponse: any = await this.octokit.repos.getContent({
+						owner: this.settings.gitHubUsername,
+						repo: this.settings.gitHubRepoName,
+						path: file.path
+					});
+					repoFile.base64Content = existingFileResponse.data.content.replace(/\n/g, '').trim();
+					repoFile.sha = existingFileResponse.data.sha;
+
+					deletedFiles.push(file.path);
+				} catch (error) {
+					if (error.message.includes('404') || error.message.includes('Not Found') || error.message.includes('This repository is empty')) {
+						console.log(`${file.path} not present in repository`);
+					} else {
+						console.error(`Error checking ${JSON.stringify(file)}:`, error);
+						throw error;
+					}
+				}
+
+				if (localFileSha === repoFile.sha)
+					continue;
+
+				const base64Content = this.encodeToBase64(fileContent);
+
+				if (repoFile.base64Content !== base64Content) {
+					await this.octokit.repos.createOrUpdateFileContents({
+						owner: this.settings.gitHubUsername,
+						repo: this.settings.gitHubRepoName,
+						path: file.path,
+						message: message,
+						content: base64Content,
+						sha: repoFile.sha,
+						committer: {
+							name: this.settings.gitHubUsername,
+							email: this.settings.userEmail
+						}
+					});
+
+					console.log('Pushing:', file.path);
+					uploadedFiles.push(file.path);
+				} else {
+					throw new Error(
+						`Error pushing vault, non matching SHAs on matching contents:
 							
 							File: ${file.path}
 
@@ -385,50 +402,42 @@ export default class GitSync extends Plugin {
 
 							Encoded Repo file:  
 								- SHA: ${repoFile.sha}
-								- Content: ${atob(repoFile.base64Content)}
+								- Content: ${this.decodeFromBase64(repoFile.base64Content)}
 								- Encoded content: ${repoFile.base64Content}
 
 							Matches:
 								- SHA: ${localFileSha === repoFile.sha}
-								- Content: ${fileContent === atob(repoFile.base64Content)}
+								- Content: ${fileContent === this.decodeFromBase64(repoFile.base64Content)}
 								- Encoded content: ${base64Content === repoFile.base64Content}\n`
-						);
-					}
-					//TODO: i think empty fgiles are not being uploaded
-					this.statusBarText.textContent = message;
+					);
 				}
-				console.log('--FINISHED PUSH--');
-				console.log('Uploaded files', uploadedFiles);
-				console.log('Ignored files', ignoredFiles);
-			} catch (error) {
-				console.error(error)
-				new Notice('Error pushing vault', 4000);
+
+				this.statusBarText.textContent = message;
 			}
-		} else {
-			new Notice('Plugin not configured', 4000);
+			console.log('--FINISHED PUSH--');
+			console.log('Uploaded files', uploadedFiles);
+			console.log('Ignored files', ignoredFiles);
+		} catch (error) {
+			console.error(error)
+			new Notice('Error pushing vault', 4000);
 		}
+
 	}
 
 	// Helper function to encode content string to base64
-	async encodeToBase64(fileContent: string) {
-		const fileBlob = new Blob([fileContent], { type: "text/plain; charset=utf-8" });
-		const base64Content = await new Promise<string>((resolve, reject) => {
-			const reader = new FileReader();
-			reader.onload = () => {
-				const result = reader.result as string;
+	encodeToBase64(stringContent: string) {
+		const encoder = new TextEncoder();
+		const utf8Array = encoder.encode(stringContent);
+		const base64String = Base64.fromUint8Array(utf8Array);
+		return base64String;
+	}
 
-				if (result === "data:text/plain; charset=utf-8;base64,") {
-					resolve("");
-				} else {
-					const base64Data = result.split(",")[1] || result;
-					resolve(base64Data.trim().replace(/\n/g, ""));
-				}
-			};
-			reader.onerror = () => reject(reader.error);
-			reader.readAsDataURL(fileBlob);
-		});
-
-		return base64Content;
+	// Helper function to decode base64 to uft8 string 
+	decodeFromBase64(base64String: string) {
+		const uint8Array = Base64.toUint8Array(base64String);
+		const decoder = new TextDecoder('utf-8');
+		const decodedString = decoder.decode(uint8Array);
+		return decodedString;
 	}
 
 	// Function that recursively searches and stores all the folders and files of the repository
@@ -471,50 +480,60 @@ export default class GitSync extends Plugin {
 				}
 			}
 		} catch (error) {
-			new Notice(error, 4000);
+			console.error(error)
+			if (error.message.includes('empty'))
+				files = [{ path: 'empty', type: 'file', sha: '' }];
+			else
+				files = [{ path: 'error', type: 'file', sha: '' }];
 		} finally {
 			return files;
 		}
 	}
 
-	//NOTE: For now it gives priority to the repo's content and it does not handle conflicts
-
-	//TODO: Option 1: refactor method in such way where theres this loop where it iterates and compares through all files and then decides if it needs to update it or delete item
-
-	//TODO: Option 2: use the same .filter approach but with files that need updating?
+	//FIX: For now it gives priority to the repo's content and it does not handle conflicts
 
 	// Check's for new files in the repository and downloads them
 	async pullVault() {
-		if (!this.settings.isConfigured)
+		if (!this.settings.isConfigured) {
 			new Notice('Plugin not configured', 4000);
+			return;
+		}
 
-		const localFiles = await this.getLocalFiles();
-		const repoFiles = await this.fetchVault();
+		try {
+			const localFiles = await this.getLocalFiles();
+			const repoFiles = await this.fetchVault();
 
-		const repoFilesMap = new Map<string, FileInfo>(repoFiles.map((file: FileInfo) => [file.path, file]));
-
-		const filesToDelete = [];
-		const filesToCreateOrUpdate = [];
-
-		for (const localFile of localFiles) {
-			const repoFile = repoFilesMap.get(localFile.path);
-
-			if (!repoFile) {
-				filesToDelete.push(localFile);
-			} else if (repoFile.sha !== localFile.sha) {
-				if (repoFile.type === 'file')
-					filesToCreateOrUpdate.push(localFile);
+			if (repoFiles[0].path.includes('empty')) {
+				new Notice('Repository is empty', 4000);
+				return;
+			} else if (repoFiles[0].path.includes('error')) {
+				throw new Error('Error while fetching repository');
 			}
 
-			repoFilesMap.delete(localFile.path);
-		}
+			const repoFilesMap = new Map<string, FileInfo>(repoFiles.map((file: FileInfo) => [file.path, file]));
 
-		for (const [, repoFile] of repoFilesMap) {
-			filesToCreateOrUpdate.push(repoFile);
-		}
+			const filesToDelete = [];
+			const filesToCreateOrUpdate = [];
 
-		if (filesToDelete.length > 0 || filesToCreateOrUpdate.length > 0) {
-			try {
+			for (const localFile of localFiles) {
+				const repoFile = repoFilesMap.get(localFile.path);
+
+				if (!repoFile) {
+					filesToDelete.push(localFile);
+				} else if (repoFile.sha !== localFile.sha) {
+					if (repoFile.type === 'file')
+						filesToCreateOrUpdate.push(localFile);
+				}
+
+				repoFilesMap.delete(localFile.path);
+			}
+
+			for (const [, repoFile] of repoFilesMap) {
+				filesToCreateOrUpdate.push(repoFile);
+			}
+
+			if (filesToDelete.length > 0 || filesToCreateOrUpdate.length > 0) {
+
 				if (filesToDelete.length > 0) {
 					const filesToDeleteSorted = filesToDelete.sort((a, b) => b.path.split('/').length - a.path.split('/').length);
 					for (const file of filesToDeleteSorted) {
@@ -533,12 +552,13 @@ export default class GitSync extends Plugin {
 
 				console.log('--FINISHED PULL--');
 				new Notice('Vault updated succesfully', 4000);
-			} catch (error) {
-				console.error(error);
-				new Notice('Error pulling changes', 4000);
+
+			} else {
+				new Notice('Nothing to update', 4000);
 			}
-		} else {
-			new Notice('Nothing to update', 4000);
+		} catch (error) {
+			console.error(error);
+			new Notice('Error pulling changes', 4000);
 		}
 	}
 
@@ -555,11 +575,10 @@ export default class GitSync extends Plugin {
 				path: filePath,
 			});
 
-			const fileContent = atob((fileContentResponse.data as any).content);
-
-			//FIX: Characters outisde the LATIN1 range
+			const fileContent = this.decodeFromBase64((fileContentResponse.data as any).content);
 
 			if (existingFile && existingFile instanceof TFile) {
+
 				await this.app.vault.modify(existingFile, fileContent);
 				console.log(`Updated file: ${vaultPath}`);
 			} else {
