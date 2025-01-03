@@ -101,6 +101,8 @@ interface FileInfo {
 	sha: string;
 }
 
+//TODO: Research some possible comflicts and how to handle them
+//TODO: Research how to do a single commit whith all files
 export default class GitSync extends Plugin {
 	settings: GitSettings;
 	gitIntervalId: NodeJS.Timer;
@@ -116,7 +118,8 @@ export default class GitSync extends Plugin {
 
 		// Check for local repos or newer versions and start the interval
 		this.app.workspace.onLayoutReady(async () => {
-			//this.pullVault();
+			//FIX: Only pull vault if local changes are older than the repo changes
+			this.pullVault();
 
 			this.startGitInterval()
 
@@ -298,6 +301,7 @@ export default class GitSync extends Plugin {
 			const message = 'Vault saved at ' + this.getCurrentDate();
 
 			const localFiles = await this.getLocalFiles();
+			//TODO: SHOW MODAL IF LOCALFILES IS EMPTY TO MAKE SURE OF THIS OPERATION
 
 			const repoFiles: FileInfo[] = await this.fetchVault();
 
@@ -529,8 +533,6 @@ export default class GitSync extends Plugin {
 		}
 	}
 
-	//FIX: For now it gives priority to the repo's content and it does not handle conflicts
-
 	// Check's for new files in the repository and downloads them
 	async pullVault() {
 		if (!this.settings.isConfigured) {
@@ -683,12 +685,12 @@ export default class GitSync extends Plugin {
 	}
 
 	async closeApp() {
-		//if (!this.settings.isConfigured)
-		//	return;
-		//
-		//await this.stopGitInterval();
-		//await this.saveSettings();
-		//await this.pushVault();
+		if (!this.settings.isConfigured)
+			return;
+		
+		await this.stopGitInterval();
+		await this.saveSettings();
+		await this.pushVault();
 	}
 
 	// Adds the commads to init, delete, commit, push, fetch, and toggle the interval
