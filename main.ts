@@ -264,7 +264,7 @@ export default class GitSync extends Plugin {
 		return files;
 	}
 
-	// Helper function that calculates the SHA in the GitHub method of the given file content
+	// Helper function that calculates the SHA in the GitHub method of the given text file content
 	getSha(fileContents: string): string {
 		let blobString: string;
 		const encoder = new TextEncoder();
@@ -274,15 +274,15 @@ export default class GitSync extends Plugin {
 		return CryptoJS.SHA1(blobString).toString(CryptoJS.enc.Hex);
 	}
 
+	// Helper function that calculates the SHA in the GitHub method of the given binary file content
 	getShaForBinary(fileRawContents: any) {
 		const size = fileRawContents.byteLength;
-
 		const uint8Array = new Uint8Array(fileRawContents);
-
-		const blobString = `blob ${size}\0${String.fromCharCode.apply(null, uint8Array)}`;
-
+		let blobString = `blob ${size}\0`;
+		for (let i = 0; i < uint8Array.length; i++) {
+			blobString += String.fromCharCode(uint8Array[i]);
+		}
 		const wordArray = CryptoJS.enc.Latin1.parse(blobString);
-
 		return CryptoJS.SHA1(wordArray).toString(CryptoJS.enc.Hex);
 	}
 
