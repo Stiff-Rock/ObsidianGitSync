@@ -266,11 +266,24 @@ export default class GitSync extends Plugin {
 
 	// Helper function that calculates the SHA in the GitHub method of the given file content
 	getSha(fileContents: string): string {
+		let blobString: string;
 		const encoder = new TextEncoder();
 		const encodedContent = encoder.encode(fileContents);
 		const size = encodedContent.length;
-		const blobString = `blob ${size}\0${fileContents}`;
+		blobString = `blob ${size}\0${fileContents}`;
 		return CryptoJS.SHA1(blobString).toString(CryptoJS.enc.Hex);
+	}
+
+	getShaForBinary(fileRawContents: any) {
+		const size = fileRawContents.byteLength;
+
+		const uint8Array = new Uint8Array(fileRawContents);
+
+		const blobString = `blob ${size}\0${String.fromCharCode.apply(null, uint8Array)}`;
+
+		const wordArray = CryptoJS.enc.Latin1.parse(blobString);
+
+		return CryptoJS.SHA1(wordArray).toString(CryptoJS.enc.Hex);
 	}
 
 	// Uploads the new and updated files into the repository
@@ -280,6 +293,7 @@ export default class GitSync extends Plugin {
 			return;
 		}
 
+		let uploadedFiles: string[] = [];
 		try {
 			const message = 'Vault saved at ' + this.getCurrentDate();
 
@@ -323,9 +337,6 @@ export default class GitSync extends Plugin {
 				console.log('Deleted files', deletedFiles);
 			}
 
-			let ignoredFiles: string[] = [];
-			let uploadedFiles: string[] = [];
-
 			// Handle file creation or updating
 			for (const file of localFiles) {
 				if (file.type === 'dir')
@@ -338,13 +349,24 @@ export default class GitSync extends Plugin {
 					continue;
 				}
 
-				const fileContent = await this.app.vault.read(tFile);
 
-				if (fileContent.length === 0) {
-					await this.app.vault.modify(tFile, 'Placeholder text so empty files don\'t get deleted by github');
+
+				let fileContent: string | Uint8Array = '';
+				let localFileSha: string = '';
+
+				const fileType = this.getFileExtension(file.path);
+				if (fileType === 'text') {
+					fileContent = await this.app.vault.read(tFile);
+
+					if (fileContent.length === 0)
+						await this.app.vault.modify(tFile, 'Placeholder text so empty files don\'t get deleted by github');
+
+					localFileSha = this.getSha(fileContent);
 				}
-
-				const localFileSha = this.getSha(fileContent);
+				else {
+					fileContent = new Uint8Array(await this.app.vault.readBinary(tFile));
+					localFileSha = this.getShaForBinary(fileContent);
+				}
 
 				// Check if file exists to update it
 				let repoFile: { base64Content: string, sha: string } = { base64Content: '', sha: '' };
@@ -389,7 +411,7 @@ export default class GitSync extends Plugin {
 
 					console.log('Pushing:', file.path);
 					uploadedFiles.push(file.path);
-				} else {
+				} else if (base64Content.length > 0) {
 					throw new Error(
 						`Error pushing vault, non matching SHAs on matching contents:
 							
@@ -402,42 +424,59 @@ export default class GitSync extends Plugin {
 
 							Encoded Repo file:  
 								- SHA: ${repoFile.sha}
-								- Content: ${this.decodeFromBase64(repoFile.base64Content)}
+								- Content: ${this.decodeFromBase64(repoFile.base64Content, fileType)}
 								- Encoded content: ${repoFile.base64Content}
 
 							Matches:
 								- SHA: ${localFileSha === repoFile.sha}
-								- Content: ${fileContent === this.decodeFromBase64(repoFile.base64Content)}
+								- Content: ${fileContent.toString() === this.decodeFromBase64(repoFile.base64Content, fileType).toString()}
 								- Encoded content: ${base64Content === repoFile.base64Content}\n`
 					);
 				}
 
 				this.statusBarText.textContent = message;
 			}
+
 			console.log('--FINISHED PUSH--');
 			console.log('Uploaded files', uploadedFiles);
-			console.log('Ignored files', ignoredFiles);
 		} catch (error) {
 			console.error(error)
 			new Notice('Error pushing vault', 4000);
+			return;
 		}
 
+		if (uploadedFiles.length === 0)
+			new Notice('Nothing to push', 4000);
+		else
+			new Notice('Pushed changes succesfully!', 4000);
 	}
 
 	// Helper function to encode content string to base64
-	encodeToBase64(stringContent: string) {
-		const encoder = new TextEncoder();
-		const utf8Array = encoder.encode(stringContent);
-		const base64String = Base64.fromUint8Array(utf8Array);
+	encodeToBase64(content: string | ArrayBuffer): string {
+		let base64String: string = '';
+
+		if (typeof content === 'string') {
+			const encoder = new TextEncoder();
+			const utf8Array = encoder.encode(content);
+			base64String = Base64.fromUint8Array(utf8Array);
+		} else {
+			const uint8Array = new Uint8Array(content);
+			base64String = Base64.fromUint8Array(uint8Array);
+		}
+
 		return base64String;
 	}
 
 	// Helper function to decode base64 to uft8 string 
-	decodeFromBase64(base64String: string) {
+	decodeFromBase64(base64String: string, fileType: 'text' | 'binary'): string | Uint8Array {
 		const uint8Array = Base64.toUint8Array(base64String);
-		const decoder = new TextDecoder('utf-8');
-		const decodedString = decoder.decode(uint8Array);
-		return decodedString;
+
+		if (fileType === 'text') {
+			const decoder = new TextDecoder('utf-8');
+			return decoder.decode(uint8Array);
+		} else {
+			return uint8Array;
+		}
 	}
 
 	// Function that recursively searches and stores all the folders and files of the repository
@@ -575,14 +614,19 @@ export default class GitSync extends Plugin {
 				path: filePath,
 			});
 
-			const fileContent = this.decodeFromBase64((fileContentResponse.data as any).content);
+			const fileType = this.getFileExtension(file.path);
+			const fileContent = this.decodeFromBase64((fileContentResponse.data as any).content, fileType);
 
-			if (existingFile && existingFile instanceof TFile) {
-
-				await this.app.vault.modify(existingFile, fileContent);
-				console.log(`Updated file: ${vaultPath}`);
+			if (fileType === 'text') {
+				if (existingFile && existingFile instanceof TFile) {
+					await this.app.vault.modify(existingFile, fileContent as string);
+					console.log(`Updated file: ${vaultPath}`);
+				} else {
+					await this.app.vault.adapter.write(filePath, fileContent as string);
+					console.log(`Created file: ${vaultPath}`);
+				}
 			} else {
-				await this.app.vault.create(vaultPath, fileContent);
+				await this.app.vault.adapter.write(filePath, fileContent as string);
 				console.log(`Created file: ${vaultPath}`);
 			}
 		} else if (file.type === 'dir') {
@@ -594,6 +638,22 @@ export default class GitSync extends Plugin {
 			} else {
 				console.log(`Folder already exists: ${vaultPath}`);
 			}
+		}
+	}
+
+	getFileExtension(file: string): 'text' | 'binary' {
+		const textExtensions = ['txt', 'json', 'html', 'css', 'js', 'md', 'xml', 'csv', 'yml', 'yaml', 'canvas'];
+		const binaryExtensions = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'pdf', 'mp4', 'avi', 'zip', 'tar', 'mp3', 'wav'];
+
+		const fileExtension = (file.split('.').pop() || '').toLowerCase();
+
+		if (textExtensions.includes(fileExtension))
+			return 'text';
+		else if (binaryExtensions.includes(fileExtension))
+			return 'binary';
+		else {
+			console.warn('Unsupported file extension:', file);
+			return 'text';
 		}
 	}
 
