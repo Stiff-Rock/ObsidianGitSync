@@ -118,14 +118,20 @@ export default class GitSync extends Plugin {
 
 		// Check for local repos or newer versions and start the interval
 		this.app.workspace.onLayoutReady(async () => {
+			this.statusBarText = this.addStatusBarItem().createEl('span', { text: 'Git Sync: Started' });
+
+			if (!await this.isOnline()) {
+				new Notice('Please check your internet connection and restart thea app/plugin. Any unpushed changes you may do could cause file conflicts in the future.');
+				this.statusBarText.textContent = 'Git Sync: Please check your internet connection';
+				return;
+			}
+
 			//FIX: Only pull vault if local changes are older than the repo changes
 			this.pullVault();
 
 			this.startGitInterval()
 
 			this.addSettingTab(new GitSyncSettingTab(this.app, this));
-
-			this.statusBarText = this.addStatusBarItem().createEl('span', { text: 'Git Sync: Started' });
 
 			if (!this.settings.isConfigured)
 				this.statusBarText.textContent = 'Git Sync: Needs configuration';
@@ -175,7 +181,6 @@ export default class GitSync extends Plugin {
 		}
 	}
 
-	//FIX: Handle no internet conexion with amybe pingin if respone 500 is returned
 	async authUser() {
 		if (this.settings.gitHubPat) {
 			try {
@@ -195,6 +200,15 @@ export default class GitSync extends Plugin {
 		} else {
 			console.error('Not configured')
 			console.error(this.settings)
+		}
+	}
+
+	async isOnline() {
+		try {
+			await fetch('https://www.google.com', { method: 'HEAD', mode: 'no-cors' });
+			return true;
+		} catch (error) {
+			return false;
 		}
 	}
 
@@ -688,7 +702,7 @@ export default class GitSync extends Plugin {
 	async closeApp() {
 		if (!this.settings.isConfigured)
 			return;
-		
+
 		await this.stopGitInterval();
 		await this.saveSettings();
 		await this.pushVault();
