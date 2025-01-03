@@ -175,6 +175,7 @@ export default class GitSync extends Plugin {
 		}
 	}
 
+	//FIX: Handle no internet conexion with amybe pingin if respone 500 is returned
 	async authUser() {
 		if (this.settings.gitHubPat) {
 			try {
