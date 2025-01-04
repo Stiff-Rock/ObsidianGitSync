@@ -104,7 +104,7 @@ interface FileInfo {
 	modifiedDate: Date;
 }
 
-//TODO: Research some possible comflicts and how to handle them
+//TODO: Research some possible conflicts and how to handle them
 export default class GitSync extends Plugin {
 	settings: GitSettings;
 	gitIntervalId: NodeJS.Timer;
