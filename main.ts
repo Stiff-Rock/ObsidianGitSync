@@ -847,6 +847,7 @@ export default class GitSync extends Plugin {
 		}
 	}
 
+	//FIX: Not always pushes everything, when closing maybe beacuse the closing event interrutps it (maybe create a sepparate background process/thread) or maybe beacuse there is some missing await keyword
 	async closeApp() {
 		if (!this.settings.isConfigured)
 			return;
@@ -954,6 +955,8 @@ class GitSyncSettingTab extends PluginSettingTab {
 				text.inputEl.setAttribute("type", "password");
 			});
 
+		// TODO: add toggle so it starts disabled 
+		// Add checking validity of the name
 		// Repository name 
 		new Setting(containerEl)
 			.setName('GitHub Repository Name')
