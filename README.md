@@ -43,7 +43,7 @@ After that, store the PAT somewhere safe.
 5. **Authenticate on the plugin**: 
    - Email: Enter your email used for your GitHub account, this is used for commit signing
    - Personal Access Token: Token so the plugin can sync your vault through GitHub.
-   - GitHub Repository Name: Only when you have already created the repository from other device or manually.
+   - GitHub Repository Name: Only when you have already created the repository from another device or manually.
     
 6. **Create the repository**: Press on the "Create Repository" button so the plugin can start synchronizing you vault with GitHub.
 

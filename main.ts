@@ -960,7 +960,7 @@ class GitSyncSettingTab extends PluginSettingTab {
 		// Repository name 
 		new Setting(containerEl)
 			.setName('GitHub Repository Name')
-			.setDesc('Only fill this field with the name of the repository if you are using a manually created repository or if you are migrating to another')
+			.setDesc('Only if you have already created the repository from another device or you\'ve craeted it manually.')
 			.addText(text => {
 				this.gitHubRepoText = text;
 				text.setPlaceholder('Repository name')
