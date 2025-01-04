@@ -1,20 +1,24 @@
 import { Modal, App, Setting } from 'obsidian';
 
-export class ConflictModal extends Modal {
+export class EmptyVaultModal extends Modal {
 	constructor(app: App, onSubmit: (result: boolean) => void) {
 		super(app);
-		this.setTitle(`Possible Conflict Detected`);
+		this.setTitle('Warning: Empty Vault Push');
 		this.contentEl.innerHTML = `
-		<p>
-		It looks like there are changes in your local files that haven’t been uploaded to the cloud yet. 
-		If you continue, pulling the latest updates from the cloud might overwrite your local changes, 
-		and you could lose your work.
-		</p>
-		<ul>
-			<li>Press <strong>"Accept":</strong> Proceed and keep the cloud version. Your local changes will be replaced.</li>
-			<br>
-			<li>Press <strong>"Cancel":</strong> Stop this process. You can upload your local changes first to avoid losing them.</li>
-		</ul>
+			<p>
+				You are about to push an empty vault to a non-empty Obsidian vault on GitHub. This will result in the <strong>erasure of all the content</strong> 
+				currently in the repository.
+				<br>
+				Although the content can be recovered by manually checking the commit history of GitHub, this process may be complicated if you are not familiar with Git/GitHub.
+				<br>
+				<strong>Please ensure that this action is intentional</strong> before proceeding. Press "Accept" if you're sure you want to continue. 
+				Press "Cancel" if you want to avoid making any changes.
+			</p>
+			<ul>
+				<li>Press <strong>"Accept":</strong> to proceed with erasing and pushing the empty vault.</li>
+				<br>
+				<li>Press <strong>"Cancel":</strong> to abort the operation.</li>
+			</ul>
 		`;
 
 		new Setting(this.contentEl)

@@ -105,7 +105,6 @@ interface FileInfo {
 }
 
 //TODO: Research some possible comflicts and how to handle them
-//TODO: Research how to do a single commit whith all files
 export default class GitSync extends Plugin {
 	settings: GitSettings;
 	gitIntervalId: NodeJS.Timer;
@@ -318,15 +317,15 @@ export default class GitSync extends Plugin {
 			const message = 'Vault saved at ' + this.getCurrentDate();
 
 			const localFiles = await this.getLocalFiles();
-			if (!localFiles.length) {
+			const repoFiles: FileInfo[] = await this.fetchVault();
+
+			if (!localFiles.length && repoFiles.length) {
 				const response = await this.openEmptyVaultModal();
 				if (!response) {
 					new Notice('Push Canceled', 4000);
 					return;
 				}
 			}
-
-			const repoFiles: FileInfo[] = await this.fetchVault();
 
 			let filesToDelete: FileInfo[] = []
 			if (repoFiles)
@@ -398,7 +397,6 @@ export default class GitSync extends Plugin {
 				// Check if file exists to update it
 				let repoFile: { base64Content: string, sha: string } = { base64Content: '', sha: '' };
 				try {
-					//FIX: this shows error in the console when not finding something despite handling it prefectly
 					const existingFileResponse: any = await this.octokit.repos.getContent({
 						owner: this.settings.gitHubUsername,
 						repo: this.settings.gitHubRepoName,
@@ -409,7 +407,7 @@ export default class GitSync extends Plugin {
 
 					deletedFiles.push(file.path);
 				} catch (error) {
-					if (error.message.includes('404') || error.message.includes('Not Found') || error.message.includes('This repository is empty')) {
+					if (error.status === 404) {
 						console.log(`${file.path} not present in repository`);
 					} else {
 						console.error(`Error checking ${JSON.stringify(file)}:`, error);
