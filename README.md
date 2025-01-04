@@ -1,7 +1,7 @@
 
 # Obsidian Git Sync
 
-**Obsidian Git Sync** is a straightforward plugin for [Obsidian](https://obsidian.md) that syncs your vaults across devices (Desktop and Android) with a GitHub repository.
+**Obsidian Git Sync** is a straightforward plugin for [Obsidian](https://obsidian.md) that syncs your vaults across devices (Desktop and Android[¹](58)) with a GitHub repository.
 
 
 ## Features
@@ -27,37 +27,41 @@
 ## Getting Started
 
 1. **Create a GitHub Account**: First, sign up for a GitHub account (if you don't have one).
-2. **Generate Personal Access Token**: Go to `Profile` > `Settings` > `Developer Settings` > `Personal Access Tokens` > `Tokens (classic)`, then click on the dropdown `Generate new token` > `Generate new token (classic)`, this will take youtoa new page, just make sure you select no expiration date if you don't want to be generating new ones over and over
+2. **Generate Personal Access Token**: Go to `Profile` > `Settings` > `Developer Settings` > `Personal Access Tokens` > `Tokens (classic)`, then click on the dropdown `Generate new token` > `Generate new token (classic)`, this will take you to a configuration page. Just make sure you select no expiration date if you don't want to be generating new ones over and over and give the following permissions to the PAT:
    
-4. **Add Your Repository**: Enter your GitHub repository URL in `Settings > Obsidian Git Sync`.
-5. **Set Up Authentication**: 
-   - For HTTPS, use a Personal Access Token and ensure you enter your GitHub username.
-   - For SSH, make sure SSH authentication is configured both in GitHub and on your computer.
-6. **Sync Your Vault**: Commit, push, pull, or enable auto-commit for automatic syncing.
+<div>
+	<img src="https://github.com/user-attachments/assets/a70683be-5981-4c1f-a7f7-33584fd7bcec" alt="PatConfigImage1" width="600" />
+</div>
 
+<div>
+	<img src="https://github.com/user-attachments/assets/5b6a0a66-b8ba-4088-960f-68ccf1fd2479" alt="PatConfigImage2" width="600" />
+</div>
+
+After that, store the PAT somewhere safe.
+
+5. **Authenticate on the plugin**: 
+   - Email: Enter your email used for your GitHub account, this is used for commit signing
+   - Personal Access Token: Token so the plugin can sync your vault through GitHub.
+    
+6. **Create the repository**: Press on the "Create Repository" button so the plugin can start synchronizing you vault with GitHub.
 
 ## How it works
 
-The plugin uses **Git** to create a local repository in your vault, tracking all changes made to your files. On the backend, the plugin uses the `simple-git` JavaScript library to interact with Git repositories.
+The plugin uses **Octokit** to interact with the GitHub repository and the **Obsidina API** to sync your local vault files.
 
-- **Local Repository**: Once enabled, the plugin initializes a local Git repository in your Obsidian vault, allowing you to track file changes, commit new changes, and revert to previous versions.
-- **Remote Syncing**: The plugin syncs your local repository with a remote GitHub repository. You can choose between two authentication methods:
-  - **HTTPS**: Syncing via HTTPS requires a GitHub username and a Personal Access Token (PAT) for authentication. The plugin will handle pushing and pulling changes.
-  - **SSH**: If SSH authentication is set up, the plugin uses SSH keys for secure communication with your GitHub repository, ensuring that your sync operations are seamless and secure.
+- **Remote Syncing**: The plugin syncs your local files to the remote GitHub repository and vice-versa.
 - **Auto-Commit**: You can enable auto-commit, allowing the plugin to automatically commit and push changes at specified intervals, keeping your vault up-to-date without manual intervention.
 - **Manual Sync**: You can manually push and pull changes at any time, ensuring that your vault is always synchronized between devices.
-
 
 ## Future Plans
 
-- **Mobile Version**: I am planning to create a mobile version, but it will be a slow development process since I work on this as a hobby in my free time. Stay tuned for updates!
-
+- **iOS Support**: The plugin should work on iOS devices but I have yet to test how to install it manually and how it performs.
+- **Fine-grained personal access tokens**: I want to test working with Fine-grained PATs for better security.
   
 ## Report an Issue
 
 Feel free to contact me to report any errors or issues. 
 Please note that this is a very informal project and I'm no profesional. While I try to keep things working smoothly, there may be occasional bugs or incomplete features. Your feedback is always appreciated!!
-
 
 ## License
 
