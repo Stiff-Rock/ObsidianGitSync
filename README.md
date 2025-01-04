@@ -66,3 +66,18 @@ Please note that this is a very informal project and I'm no profesional. While I
 ## License
 
 Licensed under the [MIT License](https://opensource.org/licenses/MIT).
+
+
+**Obsidian Git Sync** is a straightforward plugin for [Obsidian](https://obsidian.md) that syncs your vaults across devices (Desktop and Android[¹](##future-plans)) with a GitHub repository.
+
+## Future Plans
+
+- **iOS Support**: The plugin should work on iOS devices but I have yet to test how to install it manually and how it performs.
+- **Fine-grained personal access tokens**: I want to test working with Fine-grained PATs for better security.
+
+---
+
+### Footnotes
+
+[¹]: This is the annotation related to Android syncing, directing you to the "Future Plans" section for more details.
+
