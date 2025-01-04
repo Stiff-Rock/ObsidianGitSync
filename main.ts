@@ -2,6 +2,8 @@ import { Plugin, PluginSettingTab, App, Setting, Notice, Tasks, TextComponent, B
 import { Octokit } from "@octokit/rest";
 import * as CryptoJS from 'crypto-js';
 import { Base64 } from 'js-base64';
+import { ConflictModal } from './conflictModal';
+import { EmptyVaultModal } from './emptyVaultModal';
 
 class GitSettings {
 	private _gitHubRepoName: string = '';
@@ -99,6 +101,7 @@ interface FileInfo {
 	path: string;
 	type: 'file' | 'dir';
 	sha: string;
+	modifiedDate: Date;
 }
 
 //TODO: Research some possible comflicts and how to handle them
@@ -126,7 +129,6 @@ export default class GitSync extends Plugin {
 				return;
 			}
 
-			//FIX: Only pull vault if local changes are older than the repo changes
 			this.pullVault();
 
 			this.startGitInterval()
@@ -271,10 +273,10 @@ export default class GitSync extends Plugin {
 		for (const entry of entries) {
 			if (entry) {
 				if (tFolders.includes(entry)) {
-					files.push({ path: entry.path, type: 'dir', sha: '' })
+					files.push({ path: entry.path, type: 'dir', sha: '', modifiedDate: new Date(entry.stat.mtime) })
 				} else if (tFiles.includes(entry)) {
 					const sha = this.getSha(await this.app.vault.read(entry as TFile));
-					files.push({ path: entry.path, type: 'file', sha: sha })
+					files.push({ path: entry.path, type: 'file', sha: sha, modifiedDate: new Date(entry.stat.mtime) })
 				}
 			}
 		}
@@ -316,7 +318,13 @@ export default class GitSync extends Plugin {
 			const message = 'Vault saved at ' + this.getCurrentDate();
 
 			const localFiles = await this.getLocalFiles();
-			//TODO: SHOW MODAL IF LOCALFILES IS EMPTY TO MAKE SURE OF THIS OPERATION
+			if (!localFiles.length) {
+				const response = await this.openEmptyVaultModal();
+				if (!response) {
+					new Notice('Push Canceled', 4000);
+					return;
+				}
+			}
 
 			const repoFiles: FileInfo[] = await this.fetchVault();
 
@@ -377,7 +385,7 @@ export default class GitSync extends Plugin {
 				if (fileType === 'text') {
 					fileContent = await this.app.vault.read(tFile);
 
-					if (fileContent.length === 0)
+					if (!fileContent.length)
 						await this.app.vault.modify(tFile, 'Placeholder text so empty files don\'t get deleted by github');
 
 					localFileSha = this.getSha(fileContent);
@@ -430,7 +438,7 @@ export default class GitSync extends Plugin {
 
 					console.log('Pushing:', file.path);
 					uploadedFiles.push(file.path);
-				} else if (base64Content.length > 0) {
+				} else if (base64Content) {
 					throw new Error(
 						`Error pushing vault, non matching SHAs on matching contents:
 							
@@ -464,7 +472,7 @@ export default class GitSync extends Plugin {
 			return;
 		}
 
-		if (uploadedFiles.length === 0)
+		if (!uploadedFiles.length)
 			new Notice('Nothing to push', 4000);
 		else
 			new Notice('Pushed changes succesfully!', 4000);
@@ -515,7 +523,6 @@ export default class GitSync extends Plugin {
 					path: ''
 				});
 
-
 				if (Array.isArray(response.data)) {
 					files = await this.fetchVault(response.data);
 				} else {
@@ -524,8 +531,24 @@ export default class GitSync extends Plugin {
 
 			} else {
 				for (const item of items) {
+					// Check for potential conflicts
+					const commits = await this.octokit.repos.listCommits({
+						owner: this.settings.gitHubUsername,
+						repo: this.settings.gitHubRepoName,
+						path: item.path,
+						per_page: 1,
+					});
+
+					let lastModifiedDate = new Date(2000, 0, 0);
+					console.log('DEFAULT DATE', lastModifiedDate)
+					if (commits.data.length) {
+						const lastCommit = commits.data[0];
+						const lastModified = lastCommit.commit.author!.date;
+						lastModifiedDate = new Date(lastModified as string);
+					}
+
 					if (item.type === 'dir') {
-						files.push({ path: item.path, type: 'dir', sha: item.sha });
+						files.push({ path: item.path, type: 'dir', sha: item.sha, modifiedDate: lastModifiedDate });
 						const dirResponse = await this.octokit.repos.getContent({
 							owner: this.settings.gitHubUsername,
 							repo: this.settings.gitHubRepoName,
@@ -533,16 +556,15 @@ export default class GitSync extends Plugin {
 						});
 						files.push(... await this.fetchVault(dirResponse.data))
 					} else if (item.type === 'file') {
-						files.push({ path: item.path, type: 'file', sha: item.sha });
+						files.push({ path: item.path, type: 'file', sha: item.sha, modifiedDate: lastModifiedDate });
 					}
 				}
 			}
 		} catch (error) {
 			console.error(error)
+			files = [{ path: 'error', type: 'file', sha: '', modifiedDate: new Date(2000, 0, 0) }];
 			if (error.message.includes('empty'))
-				files = [{ path: 'empty', type: 'file', sha: '' }];
-			else
-				files = [{ path: 'error', type: 'file', sha: '' }];
+				files[0].path = 'empty'
 		} finally {
 			return files;
 		}
@@ -588,9 +610,26 @@ export default class GitSync extends Plugin {
 				filesToCreateOrUpdate.push(repoFile);
 			}
 
-			if (filesToDelete.length > 0 || filesToCreateOrUpdate.length > 0) {
+			if (filesToDelete.length || filesToCreateOrUpdate.length) {
+				const repoFileDate = this.findNewestEntry(repoFiles);
+				const localFileDate = this.findNewestEntry(localFiles);
 
-				if (filesToDelete.length > 0) {
+				if (localFileDate.modifiedDate > repoFileDate.modifiedDate) {
+					console.warn('COULD BE LOSING DATA');
+					console.warn('REPO:', repoFileDate);
+					console.warn('LOCAL:', localFileDate);
+
+					const response = await this.openConflictModal();
+					console.log('User response:', response);
+
+					if (!response) {
+						new Notice('Pull Canceled', 4000);
+						return;
+					}
+				}
+
+				// Handle local file deletion
+				if (filesToDelete.length) {
 					const filesToDeleteSorted = filesToDelete.sort((a, b) => b.path.split('/').length - a.path.split('/').length);
 					for (const file of filesToDeleteSorted) {
 						const vaultFile = this.app.vault.getAbstractFileByPath(file.path.replace(/\\/g, '/'));
@@ -599,7 +638,8 @@ export default class GitSync extends Plugin {
 					}
 				}
 
-				if (filesToCreateOrUpdate.length > 0) {
+				// Handle local file updating/creating
+				if (filesToCreateOrUpdate.length) {
 					console.log('Files to create/update', filesToCreateOrUpdate)
 					for (const file of filesToCreateOrUpdate) {
 						this.downloadRepoFiles(file);
@@ -617,6 +657,25 @@ export default class GitSync extends Plugin {
 			new Notice('Error pulling changes', 4000);
 		}
 	}
+
+	// Helper function to get the most recent date on an array of FileInfo 
+	findNewestEntry(entries: FileInfo[]) {
+		return entries.reduce((a, b) => (a.modifiedDate > b.modifiedDate ? a : b));
+	}
+
+	async openConflictModal(): Promise<boolean> {
+		return await new Promise<boolean>((resolve) => {
+			new ConflictModal(this.app, resolve).open();
+		});
+
+	}
+
+	async openEmptyVaultModal(): Promise<boolean> {
+		return await new Promise<boolean>((resolve) => {
+			new EmptyVaultModal(this.app, resolve).open();
+		});
+	}
+
 
 	// Helper function that fetches and and creates the repository files and folders
 	async downloadRepoFiles(file: FileInfo) {
