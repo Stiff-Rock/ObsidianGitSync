@@ -320,6 +320,7 @@ export default class GitSync extends Plugin {
 			return;
 		}
 
+		new Notice('Starting Push...', 4000);
 		this.statusBarText.textContent = 'Git Sync: Starting Push...';
 
 		let uploadedFiles: string[] = [];
@@ -403,7 +404,7 @@ export default class GitSync extends Plugin {
 					fileContent = await this.app.vault.read(tFile);
 
 					if (!fileContent.length)
-						await this.app.vault.modify(tFile, 'Placeholder text so empty files don\'t get deleted by github');
+						await this.app.vault.modify(tFile, 'Placeholder text so empty files don\'t get deleted by GitHub.');
 
 					localFileSha = this.getSha(fileContent);
 				}
@@ -600,6 +601,7 @@ export default class GitSync extends Plugin {
 			return;
 		}
 
+		new Notice('Starting Pull...', 10000);
 		this.statusBarText.textContent = 'Git Sync: Starting Pull...';
 
 		try {
@@ -987,10 +989,10 @@ class GitSyncSettingTab extends PluginSettingTab {
 					let status = '';
 
 					if (value) {
-						status = 'AutoCommit enabled';
+						status = 'AutoCommit Enabled';
 						this.intervalTimeText.inputEl.disabled = false;
 					} else {
-						status = 'AutoCommit disabled';
+						status = 'AutoCommit Disabled';
 						this.intervalTimeText.inputEl.disabled = true;
 					}
 
