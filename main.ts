@@ -116,6 +116,7 @@ interface FileInfo {
 }
 
 //TODO: Research some possible conflicts and how to handle them
+//TODO: Optimize possible redundant calls to Obisdian/Githubs APIs
 export default class GitSync extends Plugin {
 	settings: GitSettings;
 	gitIntervalId: NodeJS.Timer;
@@ -295,8 +296,25 @@ export default class GitSync extends Plugin {
 				if (tFolders.includes(entry)) {
 					files.push({ path: entry.path, type: 'dir', sha: '', modifiedDate: new Date(0) })
 				} else if (tFiles.includes(entry)) {
-					const sha = this.getSha(await this.app.vault.read(entry as TFile));
-					files.push({ path: entry.path, type: 'file', sha: sha, modifiedDate: new Date(entry.stat.mtime) })
+					let fileSha = '';
+
+					const fileType = this.getFileExtension(entry.path);
+
+					let fileContent: string | Uint8Array;
+					if (fileType === 'text') {
+						fileContent = await this.app.vault.read(entry);
+
+						if (!fileContent.length)
+							await this.app.vault.modify(entry, 'Placeholder text so empty files don\'t get deleted by GitHub.');
+
+						fileSha = this.getSha(fileContent);
+					}
+					else {
+						fileContent = new Uint8Array(await this.app.vault.readBinary(entry));
+						fileSha = this.getShaForBinary(fileContent);
+					}
+
+					files.push({ path: entry.path, type: 'file', sha: fileSha, modifiedDate: new Date(entry.stat.mtime) })
 				}
 			}
 		}
@@ -407,25 +425,6 @@ export default class GitSync extends Plugin {
 					continue;
 				}
 
-
-
-				let fileContent: string | Uint8Array = '';
-				let localFileSha: string = '';
-
-				const fileType = this.getFileExtension(file.path);
-				if (fileType === 'text') {
-					fileContent = await this.app.vault.read(tFile);
-
-					if (!fileContent.length)
-						await this.app.vault.modify(tFile, 'Placeholder text so empty files don\'t get deleted by GitHub.');
-
-					localFileSha = this.getSha(fileContent);
-				}
-				else {
-					fileContent = new Uint8Array(await this.app.vault.readBinary(tFile));
-					localFileSha = this.getShaForBinary(fileContent);
-				}
-
 				// Check if file exists to update it
 				let repoFile: { base64Content: string, sha: string } = { base64Content: '', sha: '' };
 				try {
@@ -447,8 +446,21 @@ export default class GitSync extends Plugin {
 					}
 				}
 
-				if (localFileSha === repoFile.sha)
+				if (file.sha === repoFile.sha)
 					continue;
+
+				const fileType = this.getFileExtension(file.path);
+
+				let fileContent: string | Uint8Array;
+				if (fileType === 'text') {
+					fileContent = await this.app.vault.read(tFile);
+
+					if (!fileContent.length)
+						await this.app.vault.modify(tFile, 'Placeholder text so empty files don\'t get deleted by GitHub.');
+				}
+				else {
+					fileContent = new Uint8Array(await this.app.vault.readBinary(tFile));
+				}
 
 				const base64Content = this.encodeToBase64(fileContent);
 
@@ -477,7 +489,7 @@ export default class GitSync extends Plugin {
 							File: ${file.path}
 
 							Local file:
-								- SHA: ${localFileSha}
+								- SHA: ${file.sha}
 								- Content: ${fileContent}
 								- Encoded content: ${base64Content}
 
@@ -487,7 +499,7 @@ export default class GitSync extends Plugin {
 								- Encoded content: ${repoFile.base64Content}
 
 							Matches:
-								- SHA: ${localFileSha === repoFile.sha}
+								- SHA: ${file.sha === repoFile.sha}
 								- Content: ${fileContent.toString() === this.decodeFromBase64(repoFile.base64Content, fileType).toString()}
 								- Encoded content: ${base64Content === repoFile.base64Content}\n`
 					);
@@ -497,7 +509,14 @@ export default class GitSync extends Plugin {
 			}
 
 			console.log('--FINISHED PUSH--');
-			console.log('Uploaded files', uploadedFiles);
+
+			if (!uploadedFiles.length) {
+				new Notice('Nothing to push', 4000);
+				console.log('Nothing to push');
+			} else {
+				new Notice('Pushed changes succesfully!', 4000);
+				console.log('Uploaded files', uploadedFiles);
+			}
 
 			this.statusBarText.textContent = 'Git Sync: Push Finished';
 		} catch (error) {
@@ -506,11 +525,6 @@ export default class GitSync extends Plugin {
 			this.statusBarText.textContent = 'Git Sync: Error Pushing';
 			return;
 		}
-
-		if (!uploadedFiles.length)
-			new Notice('Nothing to push', 4000);
-		else
-			new Notice('Pushed changes succesfully!', 4000);
 	}
 
 	// Helper function to encode content string to base64
