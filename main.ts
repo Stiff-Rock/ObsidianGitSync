@@ -128,14 +128,15 @@ export default class GitSync extends Plugin {
 				return;
 			}
 
-			this.pullVault();
-
 			this.startGitInterval()
 
 			this.addSettingTab(new GitSyncSettingTab(this.app, this));
 
 			if (!this.settings.isConfigured)
 				this.statusBarText.textContent = 'Git Sync: Needs configuration';
+
+			console.log('Synchronizing with vault...');
+			await this.pullVault();
 		});
 
 		this.app.workspace.on('quit', (tasks: Tasks) => {
@@ -159,7 +160,7 @@ export default class GitSync extends Plugin {
 			this.settings = new GitSettings(loadedSettings);
 			console.log("Settings loaded")
 
-			this.authUser();
+			await this.authUser();
 		}
 	}
 
@@ -221,12 +222,15 @@ export default class GitSync extends Plugin {
 				name: repoName,
 				private: true,
 			});
-			console.log('Create action response:', response);
+
+			if (response.status !== 201)
+				throw new Error(JSON.stringify(response));
 
 			this.settings.gitHubRepoName = repoName;
 
-
-			new Notice('Succesfully created repository with name' + repoName, 4000);
+			const message = 'Succesfully created repository with name' + repoName;
+			console.log(message);
+			new Notice(message, 4000);
 
 			return true;
 		} catch (error) {
@@ -246,10 +250,14 @@ export default class GitSync extends Plugin {
 				repo: this.settings.gitHubRepoName
 			});
 
-			console.log('Delete action response:', response);
+			if (response.status !== 204)
+				throw new Error(JSON.stringify(response));
+
 			this.settings.gitHubRepoName = '';
 
-			new Notice('Succesfully deleted repository', 4000);
+			const message = 'Succesfully deleted repository';
+			console.log(message);
+			new Notice(message, 4000);
 
 			return true;
 		} catch (error) {
@@ -272,7 +280,7 @@ export default class GitSync extends Plugin {
 		for (const entry of entries) {
 			if (entry) {
 				if (tFolders.includes(entry)) {
-					files.push({ path: entry.path, type: 'dir', sha: '', modifiedDate: new Date(entry.stat.mtime) })
+					files.push({ path: entry.path, type: 'dir', sha: '', modifiedDate: new Date(0) })
 				} else if (tFiles.includes(entry)) {
 					const sha = this.getSha(await this.app.vault.read(entry as TFile));
 					files.push({ path: entry.path, type: 'file', sha: sha, modifiedDate: new Date(entry.stat.mtime) })
@@ -312,17 +320,25 @@ export default class GitSync extends Plugin {
 			return;
 		}
 
+		this.statusBarText.textContent = 'Git Sync: Starting Push...';
+
 		let uploadedFiles: string[] = [];
 		try {
 			const message = 'Vault saved at ' + this.getCurrentDate();
 
 			const localFiles = await this.getLocalFiles();
-			const repoFiles: FileInfo[] = await this.fetchVault();
+			let repoFiles: FileInfo[] = await this.fetchVault();
 
-			if (!localFiles.length && repoFiles.length) {
+			if (repoFiles[0].path.includes('error')) {
+				new Notice('Error fetching repository vault data');
+				return;
+			} else if (repoFiles[0].path.includes('empty')) {
+				repoFiles = [];
+			} else if (!localFiles.length && repoFiles.length && !repoFiles[0].path.includes('empty')) {
 				const response = await this.openEmptyVaultModal();
 				if (!response) {
 					new Notice('Push Canceled', 4000);
+					this.statusBarText.textContent = 'Git Sync: Push Canceled';
 					return;
 				}
 			}
@@ -339,6 +355,8 @@ export default class GitSync extends Plugin {
 				for (const file of filesToDelete) {
 					if (file.type === 'dir')
 						continue;
+
+					this.statusBarText.textContent = 'Git Sync: Deleting ' + file.path;
 
 					try {
 						console.log(`Deleting ${file.path} from repository`);
@@ -408,7 +426,7 @@ export default class GitSync extends Plugin {
 					deletedFiles.push(file.path);
 				} catch (error) {
 					if (error.status === 404) {
-						console.log(`${file.path} not present in repository`);
+						console.warn(`${file.path} not present in repository, creating...`);
 					} else {
 						console.error(`Error checking ${JSON.stringify(file)}:`, error);
 						throw error;
@@ -421,6 +439,8 @@ export default class GitSync extends Plugin {
 				const base64Content = this.encodeToBase64(fileContent);
 
 				if (repoFile.base64Content !== base64Content) {
+					this.statusBarText.textContent = 'Git Sync: Uploading ' + file.path;
+
 					await this.octokit.repos.createOrUpdateFileContents({
 						owner: this.settings.gitHubUsername,
 						repo: this.settings.gitHubRepoName,
@@ -464,9 +484,12 @@ export default class GitSync extends Plugin {
 
 			console.log('--FINISHED PUSH--');
 			console.log('Uploaded files', uploadedFiles);
+
+			this.statusBarText.textContent = 'Git Sync: Push Finished';
 		} catch (error) {
 			console.error(error)
 			new Notice('Error pushing vault', 4000);
+			this.statusBarText.textContent = 'Git Sync: Error Pushing';
 			return;
 		}
 
@@ -537,8 +560,7 @@ export default class GitSync extends Plugin {
 						per_page: 1,
 					});
 
-					let lastModifiedDate = new Date(2000, 0, 0);
-					console.log('DEFAULT DATE', lastModifiedDate)
+					let lastModifiedDate = new Date(0);
 					if (commits.data.length) {
 						const lastCommit = commits.data[0];
 						const lastModified = lastCommit.commit.author!.date;
@@ -559,10 +581,13 @@ export default class GitSync extends Plugin {
 				}
 			}
 		} catch (error) {
-			console.error(error)
 			files = [{ path: 'error', type: 'file', sha: '', modifiedDate: new Date(2000, 0, 0) }];
-			if (error.message.includes('empty'))
+			if (error.message.includes('empty')) {
 				files[0].path = 'empty'
+				console.warn('Repository is empty');
+			}
+			else
+				console.error(error)
 		} finally {
 			return files;
 		}
@@ -575,10 +600,13 @@ export default class GitSync extends Plugin {
 			return;
 		}
 
+		this.statusBarText.textContent = 'Git Sync: Starting Pull...';
+
 		try {
 			const localFiles = await this.getLocalFiles();
 			const repoFiles = await this.fetchVault();
 
+			// Checks the fetchVault result
 			if (repoFiles[0].path.includes('empty')) {
 				new Notice('Repository is empty', 4000);
 				return;
@@ -586,6 +614,7 @@ export default class GitSync extends Plugin {
 				throw new Error('Error while fetching repository');
 			}
 
+			// Map out which file to update/delete/update
 			const repoFilesMap = new Map<string, FileInfo>(repoFiles.map((file: FileInfo) => [file.path, file]));
 
 			const filesToDelete = [];
@@ -608,21 +637,28 @@ export default class GitSync extends Plugin {
 				filesToCreateOrUpdate.push(repoFile);
 			}
 
+
 			if (filesToDelete.length || filesToCreateOrUpdate.length) {
-				const repoFileDate = this.findNewestEntry(repoFiles);
-				const localFileDate = this.findNewestEntry(localFiles);
 
-				if (localFileDate.modifiedDate > repoFileDate.modifiedDate) {
-					console.warn('COULD BE LOSING DATA');
-					console.warn('REPO:', repoFileDate);
-					console.warn('LOCAL:', localFileDate);
+				// Handle conflicts of missing newer information on the repository
+				if (repoFiles.length && localFiles.length) {
+					console.log('Checking for conflicts');
 
-					const response = await this.openConflictModal();
-					console.log('User response:', response);
+					const repoFileDate = this.findNewestEntry(repoFiles);
+					const localFileDate = this.findNewestEntry(localFiles);
 
-					if (!response) {
-						new Notice('Pull Canceled', 4000);
-						return;
+					if (localFileDate.modifiedDate > repoFileDate.modifiedDate) {
+						console.warn('COULD BE LOSING DATA');
+						console.warn('LAST REPO MODIFICATION:', repoFileDate);
+						console.warn('LAST LOCAL MODIFICATION:', localFileDate);
+
+						const response = await this.openConflictModal();
+
+						if (!response) {
+							new Notice('Pull Canceled', 4000);
+							this.statusBarText.textContent = 'Git Sync: Pull Canceled';
+							return;
+						}
 					}
 				}
 
@@ -630,6 +666,7 @@ export default class GitSync extends Plugin {
 				if (filesToDelete.length) {
 					const filesToDeleteSorted = filesToDelete.sort((a, b) => b.path.split('/').length - a.path.split('/').length);
 					for (const file of filesToDeleteSorted) {
+						this.statusBarText.textContent = 'Git Sync: Deleting ' + file.path;
 						const vaultFile = this.app.vault.getAbstractFileByPath(file.path.replace(/\\/g, '/'));
 						if (vaultFile)
 							await this.app.vault.delete(vaultFile);
@@ -638,9 +675,9 @@ export default class GitSync extends Plugin {
 
 				// Handle local file updating/creating
 				if (filesToCreateOrUpdate.length) {
-					console.log('Files to create/update', filesToCreateOrUpdate)
 					for (const file of filesToCreateOrUpdate) {
-						this.downloadRepoFiles(file);
+						this.statusBarText.textContent = 'Git Sync: Downloading ' + file.path;
+						this.downloadRepoFile(file);
 					}
 				}
 
@@ -650,9 +687,12 @@ export default class GitSync extends Plugin {
 			} else {
 				new Notice('Nothing to update', 4000);
 			}
+
+			this.statusBarText.textContent = 'Git Sync: Pull Finished';
 		} catch (error) {
 			console.error(error);
 			new Notice('Error pulling changes', 4000);
+			this.statusBarText.textContent = 'Git Sync: Error Pulling';
 		}
 	}
 
@@ -676,7 +716,7 @@ export default class GitSync extends Plugin {
 
 
 	// Helper function that fetches and and creates the repository files and folders
-	async downloadRepoFiles(file: FileInfo) {
+	async downloadRepoFile(file: FileInfo) {
 		const filePath = file.path;
 		const vaultPath = filePath.replace(/\\/g, '/');
 
@@ -855,7 +895,7 @@ class GitSyncSettingTab extends PluginSettingTab {
 				text.setValue(this.plugin.settings.gitHubPat)
 				text.onChange(async value => {
 					this.plugin.settings.gitHubPat = value;
-					this.plugin.authUser();
+					await this.plugin.authUser();
 					await this.plugin.saveSettings();
 					this.reloadFields();
 				})
