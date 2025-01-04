@@ -1,7 +1,7 @@
 import { Modal, App, Setting } from 'obsidian';
 
 export class ConflictModal extends Modal {
-	constructor(app: App, onSubmit: (result: boolean) => void) {
+	constructor(app: App, onSubmit: (result: boolean) => void, lastLocalMod: any, lastRepoMod: any) {
 		super(app);
 		this.setTitle(`Possible Conflict Detected`);
 		this.contentEl.innerHTML = `
@@ -10,6 +10,17 @@ export class ConflictModal extends Modal {
 		If you continue, pulling the latest updates from the cloud might overwrite your local changes, 
 		and you could lose your work.
 		</p>
+
+		<p>
+		<strong>Conflict Information:</strong>
+		</p>
+		<p>
+		- <strong>Last local modification: ${lastLocalMod.path} <br> At ${lastLocalMod.modifiedDate}</strong>
+		</p>
+		<p>
+		- <strong>Last repository modification: ${lastRepoMod.path} <br> At ${lastRepoMod.modifiedDate}</strong>
+		</p>
+
 		<ul>
 			<li>Press <strong>"Accept":</strong> Proceed and keep the cloud version. Your local changes will be replaced.</li>
 			<br>

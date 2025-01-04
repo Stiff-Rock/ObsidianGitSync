@@ -18,6 +18,8 @@ class GitSettings {
 	private _doAutoCommit: boolean = true;
 	private _intervalTime: number = 60000;
 
+	private _lastPullTimeStamp: number;
+
 	constructor(data?: Partial<GitSettings>) {
 		if (data) {
 			Object.assign(this, data);
@@ -94,6 +96,15 @@ class GitSettings {
 	// isConfigured getters and setters
 	get isConfigured(): boolean {
 		return this._isConfigured;
+	}
+
+	// lastPullTimeStamp getters and setters
+	get lastPullTimeStamp(): number {
+		return this._lastPullTimeStamp;
+	}
+
+	set lastPullTimeStamp(value: number) {
+		this._lastPullTimeStamp = value;
 	}
 }
 
@@ -270,6 +281,8 @@ export default class GitSync extends Plugin {
 
 	// Helper function to load in an array all the vault's files
 	async getLocalFiles(): Promise<FileInfo[]> {
+		console.log('Getting local files...')
+
 		const files: FileInfo[] = [];
 
 		const tFiles: any = this.app.vault.getFiles()
@@ -539,6 +552,7 @@ export default class GitSync extends Plugin {
 
 		try {
 			if (items === null) {
+				console.log('Fetching repository files...')
 				const response = await this.octokit.repos.getContent({
 					owner: this.settings.gitHubUsername,
 					repo: this.settings.gitHubRepoName,
@@ -608,6 +622,8 @@ export default class GitSync extends Plugin {
 			const localFiles = await this.getLocalFiles();
 			const repoFiles = await this.fetchVault();
 
+			console.log('LOCAL FILES:', localFiles);
+
 			// Checks the fetchVault result
 			if (repoFiles[0].path.includes('empty')) {
 				new Notice('Repository is empty', 4000);
@@ -617,6 +633,7 @@ export default class GitSync extends Plugin {
 			}
 
 			// Map out which file to update/delete/update
+			console.log('Mapping changes...');
 			const repoFilesMap = new Map<string, FileInfo>(repoFiles.map((file: FileInfo) => [file.path, file]));
 
 			const filesToDelete = [];
@@ -625,9 +642,15 @@ export default class GitSync extends Plugin {
 			for (const localFile of localFiles) {
 				const repoFile = repoFilesMap.get(localFile.path);
 
+
+				//FIX: SHA MISSMATCH WITH IMAGES??
 				if (!repoFile) {
 					filesToDelete.push(localFile);
 				} else if (repoFile.sha !== localFile.sha) {
+					if (localFile.type !== 'dir') {
+						console.log('LOCAL FILE SHA', localFile.sha)
+						console.log('REPO FILE SHA:', repoFile.sha)
+					}
 					if (repoFile.type === 'file')
 						filesToCreateOrUpdate.push(localFile);
 				}
@@ -650,22 +673,32 @@ export default class GitSync extends Plugin {
 					const localFileDate = this.findNewestEntry(localFiles);
 
 					if (localFileDate.modifiedDate > repoFileDate.modifiedDate) {
-						console.warn('COULD BE LOSING DATA');
-						console.warn('LAST REPO MODIFICATION:', repoFileDate);
-						console.warn('LAST LOCAL MODIFICATION:', localFileDate);
+						const pullThreshold = 5 * 60 * 1000;
 
-						const response = await this.openConflictModal();
+						const localFileTime = localFileDate.modifiedDate.getTime();
+						const timeDiff = Math.abs(localFileTime - this.settings.lastPullTimeStamp);
 
-						if (!response) {
-							new Notice('Pull Canceled', 4000);
-							this.statusBarText.textContent = 'Git Sync: Pull Canceled';
-							return;
+						if (timeDiff < pullThreshold) {
+							console.log('Time conflict false positive');
+						} else {
+							console.warn('COULD BE LOSING DATA');
+							console.warn('LAST REPO MODIFICATION:', repoFileDate);
+							console.warn('LAST LOCAL MODIFICATION:', localFileDate);
+
+							const response = await this.openConflictModal(localFileDate, repoFileDate);
+
+							if (!response) {
+								new Notice('Pull Canceled', 4000);
+								this.statusBarText.textContent = 'Git Sync: Pull Canceled';
+								return;
+							}
 						}
 					}
 				}
 
 				// Handle local file deletion
 				if (filesToDelete.length) {
+					console.log('Files to delete:', filesToDelete);
 					const filesToDeleteSorted = filesToDelete.sort((a, b) => b.path.split('/').length - a.path.split('/').length);
 					for (const file of filesToDeleteSorted) {
 						this.statusBarText.textContent = 'Git Sync: Deleting ' + file.path;
@@ -677,10 +710,12 @@ export default class GitSync extends Plugin {
 
 				// Handle local file updating/creating
 				if (filesToCreateOrUpdate.length) {
+					console.log('Files to download:', filesToCreateOrUpdate);
 					for (const file of filesToCreateOrUpdate) {
 						this.statusBarText.textContent = 'Git Sync: Downloading ' + file.path;
 						this.downloadRepoFile(file);
 					}
+					this.settings.lastPullTimeStamp = Date.now();
 				}
 
 				console.log('--FINISHED PULL--');
@@ -703,9 +738,9 @@ export default class GitSync extends Plugin {
 		return entries.reduce((a, b) => (a.modifiedDate > b.modifiedDate ? a : b));
 	}
 
-	async openConflictModal(): Promise<boolean> {
+	async openConflictModal(lastLocalMod: FileInfo, lastRepoMod: FileInfo): Promise<boolean> {
 		return await new Promise<boolean>((resolve) => {
-			new ConflictModal(this.app, resolve).open();
+			new ConflictModal(this.app, resolve, lastLocalMod, lastRepoMod).open();
 		});
 
 	}
