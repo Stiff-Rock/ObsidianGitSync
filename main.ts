@@ -116,6 +116,7 @@ interface FileInfo {
 }
 
 //TODO: Research some possible conflicts and how to handle them
+//TODO: Change compairson method before pulling/pushing with the single file record
 //TODO: Optimize possible redundant calls to Obisdian/Githubs APIs
 export default class GitSync extends Plugin {
 	settings: GitSettings;
